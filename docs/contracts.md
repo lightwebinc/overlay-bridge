@@ -121,6 +121,69 @@ implementation cannot be verified against your own types.
 VERIFIED against a released `@bsv/overlay` v2.3.1 engine: the reply through
 the facade is byte-identical to the engine's own.
 
+## Header read API, the two shapes
+
+A consumer that verifies SPV against this bridge implements a chain tracker
+over these routes. It does so WITHOUT importing this module: an HTTP contract
+plus a vendored fixture is a cheaper coupling than a Go dependency, and it is
+the only option for a consumer that is not written in Go.
+
+So the response bodies are a contract with other repositories, not an internal
+detail, and they are generated once here rather than described in prose and
+re-derived per repo. `headers/testdata/*.json` holds them, pinned by
+`TestHeaderAPIFixtures`; regenerate deliberately with
+`go test ./headers -run TestHeaderAPIFixtures -regen`.
+
+### Native shape
+
+`GET /v1/tip`
+
+```json
+{"hash": "<64 hex>", "height": 101, "known": true}
+```
+
+`GET /v1/root/{height}`, height held:
+
+```json
+{"height": 101, "known": true, "merkleRoot": "<64 hex>"}
+```
+
+`GET /v1/root/{height}`, height not held, **404**:
+
+```json
+{"height": 999999}
+```
+
+The 404 is load-bearing. A height this bridge cannot answer for is "not yet",
+not "something is broken", and a consumer must turn 404 into "this root is not
+valid" while turning any OTHER non-ok status into a thrown error. Collapsing
+the two makes a broken header service look like a failed proof, which is the
+one reading an engine must never make.
+
+### Chaintracks-compatible shape
+
+`GET /chaintracks/v2/height` and `GET /chaintracks/v2/header/height/{height}`,
+for a stock host that can only be pointed at a header service by
+configuration. The prefix is a default and is overridable.
+
+```json
+{"height": 101}
+{"hash": "<64 hex>", "height": 101, "merkleRoot": "<64 hex>"}
+```
+
+An unknown height here is a **bare 404 with no body**, deliberately: this route
+once filled an unknown hash with the current tip's and answered 200, which
+handed the client a fabricated header identity. A chaintracks client keys
+headers by hash, so that is the worst failure available on this route.
+
+### The one thing that silently fails
+
+`merkleRoot` is the SDK's **display hex**. A byte-reversed or `0x`-prefixed
+rendering fails every comparison in every consumer while this service goes on
+answering 200. Verified the hard way: a consumer fed little-endian roots
+refused every object with "invalid merkle path", and the service looked
+healthy throughout.
+
 ## Outcome vocabulary
 
 `admitted`, `empty`, `error`. `empty` is the engine's duplicate answer and the
