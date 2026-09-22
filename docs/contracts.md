@@ -2,6 +2,29 @@
 
 Decisions this repository is held to, and the questions it has not settled.
 
+## What has been proven against real upstream code
+
+Run 2026-09-22 against a released `@bsv/overlay` v2.3.1 engine, constructed
+directly with no advertiser (the reference-host posture), and against the real
+`ChaintracksProvider` client from `@bsv/overlay-express` v2.6.1:
+
+| Claim | How it was proven |
+| --- | --- |
+| A delivered record becomes an ordinary submit | A BRC-149 record written to the object lane reached the engine as `POST /submit`, `x-topics: tm_proof`, octet-stream, object verbatim, and the engine ADMITTED it |
+| The submit request form is the one both engines accept | The real engine accepted it unchanged |
+| The engine answers a BARE STEAK | Captured verbatim as `feed/testdata/steak_bare_real_engine.json`. The bare branch is a requirement, not a hedge |
+| The facade relays a client-readable reply | The reply through the facade is byte-identical to the engine's own |
+| `currentHeight()` | The real client returned the chained tip height |
+| `findHeaderForHeight(h)` | The real client returned the header for a chained height |
+| An unknown height is not an error | The real client returned `undefined` rather than throwing |
+| `isValidRootForHeight` | The real client returned true for the correct root and false for a wrong one, which is what proves the display-hex rendering |
+| The anchor height resolves through the fallback | Served from the header service, as a real deployment does |
+
+What this does NOT yet prove: the bridge has not run against a stock
+`overlay-express` server (route 2 of the propagation posture), and no run has
+been made against the Go engine, whose wire forms are covered by fixtures
+rather than by a live host.
+
 ## Submit request, the one form both engines accept
 
 | Element | Value | Why it is not negotiable |
