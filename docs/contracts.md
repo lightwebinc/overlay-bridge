@@ -32,6 +32,23 @@ A count of what came off the plane, never a count of what the host holds. An
 engine can acquire objects through its own catch-up protocol that never
 traverse this feed. The oracle for what a host holds is its own lookup service.
 
+## Bound before parse
+
+`headers.GuardBUMPs` walks an object's BUMP section allocating nothing and
+rejects any declared length the remaining bytes could not encode. It exists
+because a reader that sizes a merkle path straight from the wire can be made to
+demand an arbitrary allocation by a very small object, and that failure ends
+the process rather than returning an error, so no recover sees it. This lane is
+reachable by anyone who can put an object on the plane.
+
+The bridge itself does not parse BEEF today: the feed's only structural claim
+is the leading-marker gate, and the loop guard hashes bytes rather than parsing
+them. The guard is exported for the sink mode and for any consumer of this
+package, and the rule it encodes is the standing one: bound first, then parse,
+and keep a recover as the third layer rather than the first. Pinning a fixed
+parser version is not a substitute, because the pin fixes the known case and
+the rule is general.
+
 ## Open items
 
 **Unused Kafka client in the dependency tree.** Importing the shared
