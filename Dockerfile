@@ -35,6 +35,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 USER nonroot:nonroot
 COPY --from=builder /out/ /usr/local/bin/
+
+# The licences travel with the image. The binary above statically contains
+# go-sdk, whose licence requires its own text to be included in any copy or
+# substantial portion of the software, and static linking leaves that file
+# behind. Source-tree-only compliance does not cover a published image.
+COPY LICENSE NOTICE LICENSE-THIRD-PARTY /usr/share/doc/overlay-bridge/
 # Object lane 9171 and header lane 9172 (the edge DIALS these, so they are
 # listeners here), the submit facade 9175, the header read API 9178, then the
 # metrics and health listener 9179, which also serves /healthz and /readyz.
