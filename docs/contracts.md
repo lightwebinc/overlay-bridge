@@ -43,9 +43,36 @@ Also worth carrying: the two engines disagree on empty collections. The Go
 engine emits `coinsToRetain: null` where the TypeScript engine emits `[]`. A
 decoder that assumes either shape is wrong about one of them.
 
-What this still does NOT prove: the bridge has not run against a stock
-`overlay-express` server, which is propagation route 2 and needs a reachable
-wallet storage service.
+A third run closed the last gap: a **stock `overlay-express` server** on
+propagation route 2, with an advertiser supplied through
+`configureEngineParams` and `slapTrackers: []`.
+
+| Claim | Real behaviour |
+| --- | --- |
+| Route 2 does not propagate | CONFIRMED live. A submit that admitted an output produced `Error during propagation to other nodes: ... No competent mainnet hosts found by the SLAP trackers for lookup service: ls_ship` |
+| The mechanism is a caught THROW, not a clean skip | CONFIRMED by the stack: `Engine.propagateSubmission` to `TopicBroadcaster.broadcast` to `findInterestedHosts` to `LookupResolver.query` to `competentHostsFor`, which throws. The broadcaster's own "no interested hosts" return is never reached |
+| The submit still succeeds | CONFIRMED: 200 with a real STEAK admitting output 0 |
+| An operator must not alert on that line | Follows from the above: it is written on every submit that admits |
+| The bridge delivers into a stock host | CONFIRMED: records off the lane were submitted with no engine errors |
+
+**Route 2 needs no wallet storage service**, which had been recorded as its
+blocker. The blocker belongs to the DEFAULT advertiser, which hardcodes one and
+blocks startup on a live round trip to it. Supplying an advertiser through
+`configureEngineParams` avoids it entirely, and that is a documented
+configuration seam, so the engine is still stock.
+
+**And `configureEngine()` takes an argument that decides whether MongoDB is
+required at all.** `configureEngine(false)` skips auto-configuring the SHIP and
+SLAP discovery overlays, which is the only thing that calls `ensureMongo`. A
+plane host does not want those topic managers anyway, so it needs no MongoDB.
+That answers a question this epic had carried as unverified.
+
+Honest limit on all three runs: the hand-rolled probe objects collapse to one
+identity inside both engines, so each host admits the first and answers `empty`
+to the rest. Verified by submitting distinct objects DIRECTLY, bypassing the
+bridge, and getting the same answer. The propagation behaviour is therefore
+proven once rather than repeatedly, and a run with real, distinct BEEF is still
+owed.
 
 ## Submit request, the one form both engines accept
 
