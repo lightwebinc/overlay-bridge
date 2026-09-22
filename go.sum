@@ -1,0 +1,4 @@
+github.com/lightwebinc/shard-common v0.21.0 h1:VSm4dAxl4CZ9ndub1qzzQzYWJ6IRyaarE9OTI12siEQ=
+github.com/lightwebinc/shard-common v0.21.0/go.mod h1:rZ0oHHPAKUr9aF13QvNiLzUvCG4/Mec+cQGdkuDoNgU=
+github.com/lightwebinc/teranode-bridge v0.9.0 h1:6DJSu/lvxR7u4f0eVRXQAqPYcueCC2sdiViBjTVOtQE=
+github.com/lightwebinc/teranode-bridge v0.9.0/go.mod h1:QF/AqS2Lgwstq0FBRvxZO06sZb06kWBO9X6ZTUNB0KI=

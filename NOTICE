@@ -1,0 +1,83 @@
+overlay-bridge
+Copyright 2026 Lightweb Inc. (https://lightweb.net)
+
+=========================================================================
+
+This software is a landing-tier bridge that runs an unmodified overlay
+services engine with a multicast delivery fabric as its transport. It
+terminates a BEEF object delivery lane and hands each delivered object to
+the engine's own submit interface with the topic it matched, so delivery
+arrives as an ordinary client submission. It terminates a block header
+lane into a local, proof-of-work-checked header store and serves that
+store to the engine as its chain tracker, so SPV inside the engine checks
+against headers the host itself received. A submit facade accepts client
+broadcasts, forwards them to the local engine first, and publishes each
+accepted submission once onto the object plane, in place of the engine's
+own host-by-host propagation. The engine is not modified: no patched
+ingest, no additional endpoint, and no change to validation or to
+admittance.
+
+This product includes software developed at Lightweb Inc. and licensed
+under the Apache License, Version 2.0 (see LICENSE).
+
+=========================================================================
+Third-Party Standards
+
+This software transports objects conforming to published standards
+maintained by BSV Blockchain, and to companion specifications of the BSV
+multicast transaction distribution stack:
+
+  BRC-22:  Overlay Network Data Synchronization
+  BRC-24:  Overlay Network Lookup Services
+  BRC-62:  Background Evaluation Extended Format (BEEF) Transactions
+  BRC-88:  Overlay Services Synchronization Architecture (SHIP/SLAP)
+  BSV Blockchain Standards Repository
+  https://github.com/bsv-blockchain/BRCs/
+
+  BRC-135: Multicast Block Header Frame Format
+  BRC-148: Multicast Shard Domain Partitioning and the BEEF Object Plane
+  BRC-149: Multicast BEEF Object Frame Format
+  https://github.com/lightwebinc/bsv-multicast/
+
+=========================================================================
+Interoperability
+
+This software interoperates with an overlay services engine over its
+published network interfaces only: it submits objects to the engine's
+BRC-22 submit endpoint, serves the engine a chain tracker over HTTP, and
+serves the same BRC-22 submit interface to the engine's own clients. It
+does not incorporate, link, or redistribute any overlay engine source
+code, and it imports no engine module. The engine runs as released, in
+TypeScript or Go:
+
+  Overlay services engine and tooling (TypeScript)
+  https://github.com/bsv-blockchain/ts-stack
+
+  Overlay services engine (Go)
+  https://github.com/bsv-blockchain/go-overlay-services
+
+=========================================================================
+Third-Party Software
+
+This product includes third-party software, distributed under the terms
+of their respective licenses. Each dependency retains its own copyright;
+this notice does not modify those licenses.
+
+  github.com/lightwebinc/teranode-bridge      Apache License 2.0
+  github.com/lightwebinc/shard-common         Apache License 2.0
+  github.com/bsv-blockchain/go-sdk            Open BSV License Version 5
+  github.com/prometheus/client_golang         Apache License 2.0
+  google.golang.org/protobuf                  BSD 3-Clause License
+
+© BSV Association,
+
+The attribution line above is reproduced verbatim as the Open BSV License
+Version 5 requires it, for github.com/bsv-blockchain/go-sdk. Two terms of
+that license are worth stating in plain words, because they do not match
+the permissive licenses beside it in the table: the grant is made on a
+revocable basis, and the software it covers, together with anything
+derived from it, must only be used on the BSV Blockchains. Those terms
+bind this product's use of that dependency. They do not extend to
+Lightweb Inc.'s own source, which is Apache-2.0 as stated above.
+
+=========================================================================
