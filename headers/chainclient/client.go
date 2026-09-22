@@ -25,10 +25,24 @@ import (
 
 // Client speaks the bridge's native /v1 shape.
 type Client struct {
-	// Base is the read API's origin including the version segment, for
-	// example http://10.0.0.1:9178/v1
+	// Base is the read API's ORIGIN, without a version segment, for example
+	// http://headers.example:9178. The routes are appended here.
+	//
+	// It used to mean the origin WITH the version on it, and the two other
+	// clients written against this same service took it without. One config
+	// string with two meanings, and the symptom of getting it wrong is a 404
+	// from a service that is up. A base that still carries a trailing /v1 is
+	// accepted and normalised rather than 404ing, because operators copy these
+	// values between unit files.
 	Base string
 	HTTP *http.Client
+}
+
+// origin strips a trailing version segment so both spellings of the base
+// resolve to the same routes.
+func (c *Client) origin() string {
+	b := strings.TrimRight(c.Base, "/")
+	return strings.TrimSuffix(b, "/v1")
 }
 
 var _ chaintracker.ChainTracker = (*Client)(nil)
@@ -41,7 +55,7 @@ func (c *Client) httpClient() *http.Client {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) (int, error) {
-	url := strings.TrimRight(c.Base, "/") + path
+	url := c.origin() + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, err
@@ -76,7 +90,7 @@ func (c *Client) IsValidRootForHeight(ctx context.Context, root *chainhash.Hash,
 	var body struct {
 		MerkleRoot string `json:"merkleRoot"`
 	}
-	code, err := c.get(ctx, fmt.Sprintf("/root/%d", height), &body)
+	code, err := c.get(ctx, fmt.Sprintf("/v1/root/%d", height), &body)
 	if err != nil {
 		return false, err
 	}
@@ -99,7 +113,7 @@ func (c *Client) CurrentHeight(ctx context.Context) (uint32, error) {
 	var body struct {
 		Height uint32 `json:"height"`
 	}
-	code, err := c.get(ctx, "/tip", &body)
+	code, err := c.get(ctx, "/v1/tip", &body)
 	if err != nil {
 		return 0, err
 	}

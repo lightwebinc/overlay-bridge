@@ -71,3 +71,29 @@ func TestServerErrorIsAnError(t *testing.T) {
 		t.Fatal("a 500 on tip was reported as success")
 	}
 }
+
+// One config string, one meaning. This client once took the base WITH the
+// version segment on it while the two other clients written against the same
+// service took it without, and the symptom of copying the wrong spelling
+// between unit files is a 404 from a service that is perfectly healthy.
+func TestBothSpellingsOfTheBaseResolve(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"height":101,"hash":"aa"}`))
+	}))
+	defer srv.Close()
+
+	for _, base := range []string{srv.URL, srv.URL + "/", srv.URL + "/v1", srv.URL + "/v1/"} {
+		c := &Client{Base: base}
+		if _, err := c.CurrentHeight(context.Background()); err != nil {
+			t.Fatalf("base %q: %v", base, err)
+		}
+	}
+	for i, p := range paths {
+		if p != "/v1/tip" {
+			t.Fatalf("request %d went to %q, want /v1/tip", i, p)
+		}
+	}
+}
