@@ -64,8 +64,22 @@ configuration seam, so the engine is still stock.
 **And `configureEngine()` takes an argument that decides whether MongoDB is
 required at all.** `configureEngine(false)` skips auto-configuring the SHIP and
 SLAP discovery overlays, which is the only thing that calls `ensureMongo`. A
-plane host does not want those topic managers anyway, so it needs no MongoDB.
-That answers a question this epic had carried as unverified.
+plane host does not want those topic managers anyway, so it needs no MongoDB
+to accept traffic.
+
+It does still need one to call itself ready. Measured on the Mongo-less host:
+`/health/ready` and `/health` answer **503 for ever**, with the check list
+reading `engine: ok`, `knex: ok`, `mongo: error`, all three critical and
+`ready`-scoped; only `/health/live` is 200. So such a host is fully functional
+and permanently unready by its own report, which fails a Kubernetes readiness
+probe and the shipped container HEALTHCHECK. Run a MongoDB beside it for that
+reason alone, or point the probe at `/health/live`.
+
+**What this run did NOT prove, and must not be read as settled:** the
+advertiser supplied was a STUB that advertises nothing. Route 2's PROPAGATION
+half is proven; its ADVERTISEMENT half is not. The claim that a route-2 host
+keeps its own advertisements still rests on reading the source, and confirming
+it needs a real advertiser against reachable wallet storage.
 
 Honest limit on all three runs: the hand-rolled probe objects collapse to one
 identity inside both engines, so each host admits the first and answers `empty`
