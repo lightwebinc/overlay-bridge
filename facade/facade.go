@@ -41,8 +41,12 @@ import (
 
 // Publisher puts one BRC-149 submission record on the plane. It must not
 // block: the facade calls it from inside a client's synchronous request.
+//
+// sent runs once the record has ACTUALLY reached the plane and never if it
+// has not. Acceptance is not publication: an asynchronous send can still fail
+// after the client has been answered.
 type Publisher interface {
-	Publish(ctx context.Context, record []byte) error
+	Publish(ctx context.Context, record []byte, sent func()) error
 }
 
 // Config configures a Facade.
@@ -215,7 +219,18 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 			f.logf("facade: could not encode submission record", "topic", name, "err", err)
 			continue
 		}
-		if err := f.cfg.Publish.Publish(ctx, record); err != nil {
+		// The guard is marked Submitted only once the record has actually been
+		// sent, from the publisher's callback. Marking on acceptance into the
+		// queue would re-create the stranding this file already fixed once,
+		// one hop later: the send fails after the client got 200, the mark
+		// stays, and every retry is dropped as a loop for the guard TTL.
+		g, cid, tid := f.cfg.Guard, contentID, topicID
+		sent := func() {
+			if g != nil {
+				g.Mark(cid, tid, registry.Submitted)
+			}
+		}
+		if err := f.cfg.Publish.Publish(ctx, record, sent); err != nil {
 			// The object is admitted locally but is NOT on the plane, and the
 			// guard is deliberately left unmarked so a retry can publish it.
 			//
@@ -230,9 +245,6 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusServiceUnavailable,
 				"admitted locally but not published: the plane is unreachable or the publish queue is full; retry")
 			return
-		}
-		if f.cfg.Guard != nil {
-			f.cfg.Guard.Mark(contentID, topicID, registry.Submitted)
 		}
 	}
 

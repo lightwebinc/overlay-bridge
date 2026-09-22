@@ -87,6 +87,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descFeed, s.UnknownTopic, "unknown_topic")
 		counter(ch, descFeed, s.Rejected, "rejected")
 		counter(ch, descFeed, s.Sunk, "sunk")
+		counter(ch, descFeed, s.Shed, "shed")
 		for k, v := range s.Steak {
 			counter(ch, descSteak, v, k.Topic, k.Outcome)
 		}

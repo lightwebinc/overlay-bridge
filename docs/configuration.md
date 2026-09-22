@@ -36,6 +36,8 @@ worth an alert.
 | --- | --- | --- |
 | `-engine` | none | a BARE origin. No `/api/v1` prefix: the TypeScript host mounts submit on the app root and cannot be given a base path. The bridge refuses a prefixed value |
 | `-engine-timeout` | `30s` | per-submit ceiling |
+| `-engine-workers` | `4` | concurrent engine submits. The lane never waits on the engine: a stall there would otherwise hold the delivery socket past the edge's write deadline and turn an engine outage into a connection storm |
+| `-engine-queue` | `256` | deliveries queued behind the workers. A full queue SHEDS: the delivery is counted, logged and refused, and the host misses that object until its own catch-up finds it. Non-zero `shed` means the engine cannot keep up |
 
 ## Headers
 

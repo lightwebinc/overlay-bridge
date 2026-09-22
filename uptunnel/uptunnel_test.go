@@ -173,11 +173,11 @@ func TestQueueShedsRatherThanGrows(t *testing.T) {
 	q := NewQueue(&Client{}, 2, nil)
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
-		if err := q.Publish(ctx, []byte("x")); err != nil {
+		if err := q.Publish(ctx, []byte("x"), nil); err != nil {
 			t.Fatalf("publish %d: %v", i, err)
 		}
 	}
-	if err := q.Publish(ctx, []byte("x")); !errors.Is(err, ErrQueueFull) {
+	if err := q.Publish(ctx, []byte("x"), nil); !errors.Is(err, ErrQueueFull) {
 		t.Fatalf("third publish: %v, want ErrQueueFull", err)
 	}
 	st := q.Stats()
@@ -193,10 +193,10 @@ func TestQueueShedsRatherThanGrows(t *testing.T) {
 func TestQueueTakesOwnership(t *testing.T) {
 	q := NewQueue(&Client{}, 4, nil)
 	rec := []byte{1, 2, 3}
-	if err := q.Publish(context.Background(), rec); err != nil {
+	if err := q.Publish(context.Background(), rec, nil); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	got := <-q.ch
+	got := (<-q.ch).rec
 	if &got[0] != &rec[0] {
 		t.Fatal("queue copied the record; the contract is ownership transfer")
 	}
@@ -212,7 +212,7 @@ func TestQueueDrainsAndSurvivesAFailure(t *testing.T) {
 	go func() { done <- q.Run(ctx) }()
 
 	for i := 0; i < 3; i++ {
-		if err := q.Publish(ctx, []byte{0xBE, 0xEF, byte(i)}); err != nil {
+		if err := q.Publish(ctx, []byte{0xBE, 0xEF, byte(i)}, nil); err != nil {
 			t.Fatalf("publish %d: %v", i, err)
 		}
 	}
@@ -261,5 +261,47 @@ func TestEachClientOwnsItsConnection(t *testing.T) {
 	s.waitDials(t, 2)
 	if records.conn == other.conn {
 		t.Fatal("two clients shared one connection")
+	}
+}
+
+// TestSentCallbackRunsOnlyOnActualSend pins the contract the facade's loop
+// guard depends on: acceptance into the queue is not publication.
+func TestSentCallbackRunsOnlyOnActualSend(t *testing.T) {
+	// Nothing listening: every send fails, so the callback must never run.
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	dead := ln.Addr().String()
+	_ = ln.Close()
+	q := NewQueue(&Client{Addrs: []string{dead}}, 4, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = q.Run(ctx) }()
+
+	ran := make(chan struct{}, 1)
+	if err := q.Publish(ctx, []byte("x"), func() { ran <- struct{}{} }); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && q.Stats().Failed == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-ran:
+		t.Fatal("sent callback ran although the send failed")
+	default:
+	}
+
+	// A live sink: the callback runs once the record is written.
+	s := newSink(t)
+	defer s.close()
+	q2 := NewQueue(&Client{Addrs: []string{s.addr()}}, 4, nil)
+	go func() { _ = q2.Run(ctx) }()
+	ran2 := make(chan struct{}, 1)
+	if err := q2.Publish(ctx, []byte{0xBE, 0xEF}, func() { ran2 <- struct{}{} }); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	select {
+	case <-ran2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sent callback did not run after a successful send")
 	}
 }

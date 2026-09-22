@@ -152,6 +152,45 @@ and keep a recover as the third layer rather than the first. Pinning a fixed
 parser version is not a substitute, because the pin fixes the known case and
 the rule is general.
 
+## Reviewed 2026-09-22
+
+A full-tree review found ten items; nine were fixed with a regression test
+each, and all are recorded here because several were the kind that pass every
+stub test and fail only in deployment:
+
+- Every clean shutdown exited 1: the lane terminator returns nil on cancel and
+  the task group treated that as a failure.
+- The in-process tracker cached every root the lane delivered, so a competing
+  header at a held height overwrote the canonical root and a reorganisation
+  never corrected it. The tracker now holds no cache and asks the store.
+- Provenance of root answers was counted on that tracker, which the engine
+  never calls (it reads over HTTP), so the metric that exists to prove
+  "verification is fed by the lane" read zero for ever. It is counted in the
+  store now.
+- The chaintracks route filled an unknown hash with the tip's. It now answers
+  404 unless the fallback can name the block.
+- Fallback roots were never cached, so every verification of an old output was
+  a fresh round trip to the third-party header service on the engine's own
+  verification path.
+- The engine submit ran inline in the lane's read loop, so an engine stall
+  held the delivery socket past the edge's write deadline. There is now a
+  bounded worker pool with a visible shed.
+- The loop guard was marked when the publish queue ACCEPTED a record, so an
+  asynchronous send failure after the client's 200 stranded the object for
+  the guard TTL. It is now marked from the queue's sent callback.
+- Sink mode with topics set dereferenced a nil engine on the first delivery.
+- The publish queue copied every record, doubling the allocation of a 64 MiB
+  publish; it now takes ownership.
+
+**Not changed, recorded as a follow-up:** a multi-topic submission is
+forwarded to the engine once PER topic with the same object, so an N-topic
+submit costs N full verifications and turns a failure on the last topic into a
+502 after the earlier ones were admitted and published. Both engines accept a
+multi-topic submit, so one engine call with the reply split per topic would be
+cheaper. It is left as is for now because the two engines' multi-topic reply
+shapes have not been run, only read, and because multi-topic publication is
+not admitted by the fabric ingress today in any case.
+
 ## Open items
 
 **Unused Kafka client in the dependency tree: FIXED upstream.** Importing the

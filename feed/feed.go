@@ -22,8 +22,11 @@ package feed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-sdk/overlay"
 	"github.com/lightwebinc/overlay-bridge/guard"
@@ -51,9 +54,80 @@ type Feed struct {
 	// object becomes a rejection from the engine and an engine error here,
 	// which reads as our fault when it is a configuration mismatch.
 	MaxObject int
-	Log       *slog.Logger
+	// Workers is the number of concurrent engine submits. Zero means Handle
+	// submits synchronously, in the lane's read loop, which is the right shape
+	// for a test and the wrong one for a deployment: the engine's submit can
+	// take up to its timeout, and a stall there holds the lane's socket past
+	// the edge's write deadline, so the edge drops and redials, the delivery
+	// pool replays its last object, and an engine outage becomes a connection
+	// storm. With workers, Handle returns as soon as the object is queued.
+	Workers int
+	// QueueDepth bounds the queued objects behind the workers. Zero takes a
+	// small default. When it is full a delivery is SHED: counted, logged, and
+	// refused back to the lane, which counts it too and keeps the connection.
+	// The host misses that object until its own catch-up finds it, which is a
+	// real loss and is preferred to stalling every later delivery behind it.
+	QueueDepth int
+	Log        *slog.Logger
 
 	c counters
+
+	qmu     sync.Mutex
+	q       chan job
+	started atomic.Bool
+}
+
+// queue returns the job channel, creating it on first use under the lock so
+// Handle and Start can each be first without racing on the field.
+func (f *Feed) queue() chan job {
+	f.qmu.Lock()
+	defer f.qmu.Unlock()
+	if f.q == nil {
+		depth := f.QueueDepth
+		if depth <= 0 {
+			depth = 256
+		}
+		f.q = make(chan job, depth)
+	}
+	return f.q
+}
+
+type job struct {
+	name   string
+	object []byte
+}
+
+// ErrShed reports a delivery refused because the engine queue was full.
+var ErrShed = errors.New("feed: engine queue full, delivery shed")
+
+// Start runs the workers until ctx is cancelled. It must be called when
+// Workers is set; Handle refuses deliveries until it has.
+func (f *Feed) Start(ctx context.Context) error {
+	if f.Workers <= 0 {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	q := f.queue()
+	f.started.Store(true)
+	defer f.started.Store(false)
+	var wg sync.WaitGroup
+	for i := 0; i < f.Workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case j := <-q:
+					f.submitOne(ctx, j.name, j.object)
+				}
+			}
+		}()
+	}
+	<-ctx.Done()
+	wg.Wait()
+	return ctx.Err()
 }
 
 // NewTopicMap builds the identifier map from elected topic names.
@@ -140,9 +214,34 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		f.c.add(&f.c.sunk)
 		return nil
 	}
-	steak, err := f.Submit.Submit(ctx, name, owned)
+	if f.Workers > 0 {
+		if !f.started.Load() {
+			// Loud rather than silent: a queue nobody drains would fill and
+			// shed as if the engine were slow, which is the wrong diagnosis.
+			f.c.add(&f.c.shed)
+			return fmt.Errorf("%w: workers not started", ErrShed)
+		}
+		q := f.queue()
+		select {
+		case q <- job{name: name, object: owned}:
+			return nil
+		default:
+			f.c.add(&f.c.shed)
+			f.logReject("engine queue full, delivery shed", topicID, "bytes", len(owned), "depth", cap(q))
+			return ErrShed
+		}
+	}
+	return f.submitOne(ctx, name, owned)
+}
+
+// submitOne submits one object and books the engine's answer.
+func (f *Feed) submitOne(ctx context.Context, name string, object []byte) error {
+	steak, err := f.Submit.Submit(ctx, name, object)
 	if err != nil {
 		f.c.add(&f.c.engineError)
+		if f.Log != nil {
+			f.Log.Warn("feed: engine submit failed", "topic", name, "err", err)
+		}
 		return fmt.Errorf("feed: submit %s to engine: %w", name, err)
 	}
 	f.c.add(&f.c.submitted)

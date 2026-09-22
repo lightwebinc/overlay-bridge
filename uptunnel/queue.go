@@ -25,10 +25,16 @@ var ErrQueueFull = errors.New("uptunnel: publish queue full")
 // publication it never made.
 type Queue struct {
 	c   *Client
-	ch  chan []byte
+	ch  chan item
 	log *slog.Logger
 
 	enqueued, sent, shed, failed atomic.Uint64
+}
+
+// item is one queued record and what to run once it has actually been sent.
+type item struct {
+	rec  []byte
+	sent func()
 }
 
 // QueueStats is a point-in-time snapshot. Depth is the instantaneous backlog.
@@ -42,17 +48,23 @@ func NewQueue(c *Client, depth int, log *slog.Logger) *Queue {
 	if depth <= 0 {
 		depth = 1024
 	}
-	return &Queue{c: c, ch: make(chan []byte, depth), log: log}
+	return &Queue{c: c, ch: make(chan item, depth), log: log}
 }
 
 // Publish enqueues one record without blocking. It returns [ErrQueueFull] when
 // the queue is full, and the record is then not published. The queue takes
 // ownership of record; the caller must not touch it afterwards.
 //
-// The caller owns the decision about what that means to its own client. The
-// standing ruling is that a shed object is NOT billed, so whatever status a
+// sent, if non-nil, runs on the queue's goroutine once the record has ACTUALLY
+// been written to the tunnel, and never runs if it is not. Acceptance into the
+// queue is not publication: the send can still fail after the caller has
+// answered its client, and anything the caller must only do for a record that
+// reached the plane belongs in sent, not after Publish returns.
+//
+// The caller owns the decision about what a refusal means to its own client.
+// The standing ruling is that a shed object is NOT billed, so whatever status a
 // caller returns must not book delivered egress for it.
-func (q *Queue) Publish(ctx context.Context, record []byte) error {
+func (q *Queue) Publish(ctx context.Context, record []byte, sent func()) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -61,7 +73,7 @@ func (q *Queue) Publish(ctx context.Context, record []byte) error {
 	// every publish on the client's synchronous request path, and the one
 	// caller already hands over a freshly encoded buffer.
 	select {
-	case q.ch <- record:
+	case q.ch <- item{rec: record, sent: sent}:
 		q.enqueued.Add(1)
 		return nil
 	default:
@@ -82,15 +94,18 @@ func (q *Queue) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case rec := <-q.ch:
-			if err := q.c.Submit(ctx, rec); err != nil {
+		case it := <-q.ch:
+			if err := q.c.Submit(ctx, it.rec); err != nil {
 				q.failed.Add(1)
 				if q.log != nil {
-					q.log.Error("up-tunnel publish failed", "err", err, "bytes", len(rec))
+					q.log.Error("up-tunnel publish failed; record is not on the plane", "err", err, "bytes", len(it.rec))
 				}
 				continue
 			}
 			q.sent.Add(1)
+			if it.sent != nil {
+				it.sent()
+			}
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -239,5 +240,103 @@ func TestSinkModeCountsAndDropsWithoutAnEngine(t *testing.T) {
 	}
 	if st := f.Stats(); st.Sunk != 1 || st.Submitted != 0 {
 		t.Fatalf("stats = %+v, want one sunk and none submitted", st)
+	}
+}
+
+// slowSubmitter blocks until released, standing in for a stalled engine.
+type slowSubmitter struct {
+	release chan struct{}
+	calls   atomic.Int64
+}
+
+func (s *slowSubmitter) Submit(ctx context.Context, topic string, _ []byte) (overlay.Steak, error) {
+	s.calls.Add(1)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return admitted(topic), nil
+}
+
+// TestHandleDoesNotWaitOnTheEngine is the regression for the engine submit
+// running inline in the lane's read loop. A stalled engine used to hold the
+// delivery socket for the whole submit timeout, so the edge's write deadline
+// tripped, it dropped and redialled, the pool replayed, and an engine outage
+// became a connection storm. With workers, Handle returns as soon as the
+// object is queued.
+func TestHandleDoesNotWaitOnTheEngine(t *testing.T) {
+	sub := &slowSubmitter{release: make(chan struct{})}
+	f := &Feed{Topics: NewTopicMap([]string{"tm_example"}), Submit: sub, Workers: 1, QueueDepth: 8}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = f.Start(ctx) }()
+	for !f.started.Load() {
+		time.Sleep(time.Millisecond)
+	}
+
+	rec := objfmt.EncodeBEEFDelivery(objfmt.TopicID("tm_example"), beefObj)
+	done := make(chan error, 1)
+	go func() { done <- f.Handle(ctx, rec) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Handle blocked on a stalled engine; the lane's socket would be held past the edge's deadline")
+	}
+	// The engine really is stalled, and the object really is waiting on it.
+	if sub.calls.Load() == 0 {
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) && sub.calls.Load() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	close(sub.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && f.Stats().Submitted == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if f.Stats().Submitted != 1 {
+		t.Fatalf("stats = %+v, want the queued object submitted once released", f.Stats())
+	}
+}
+
+// TestHandleShedsWhenTheQueueIsFull pins the shed policy: a full queue refuses
+// the delivery visibly rather than blocking the lane. The host misses that
+// object until its own catch-up, which is a real loss and is preferred to
+// stalling every later delivery behind it.
+func TestHandleShedsWhenTheQueueIsFull(t *testing.T) {
+	sub := &slowSubmitter{release: make(chan struct{})}
+	defer close(sub.release)
+	f := &Feed{Topics: NewTopicMap([]string{"tm_example"}), Submit: sub, Workers: 1, QueueDepth: 1}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = f.Start(ctx) }()
+	for !f.started.Load() {
+		time.Sleep(time.Millisecond)
+	}
+
+	rec := objfmt.EncodeBEEFDelivery(objfmt.TopicID("tm_example"), beefObj)
+	// First fills the single worker, second fills the queue of one, third sheds.
+	for i := 0; i < 2; i++ {
+		if err := f.Handle(ctx, rec); err != nil {
+			t.Fatalf("handle %d: %v", i, err)
+		}
+	}
+	// Give the worker a moment to pick the first off the queue.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && sub.calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if err := f.Handle(ctx, rec); !errors.Is(err, ErrShed) {
+		// The queue may already have drained one; try once more.
+		if err := f.Handle(ctx, rec); !errors.Is(err, ErrShed) {
+			t.Fatalf("a full queue did not shed: %v", err)
+		}
+	}
+	if f.Stats().Shed == 0 {
+		t.Fatalf("stats = %+v, want a shed count", f.Stats())
 	}
 }

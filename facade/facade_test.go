@@ -44,13 +44,19 @@ func (s *stubEngine) SubmitDetail(_ context.Context, topic string, _ []byte) (fe
 type stubPublisher struct {
 	records [][]byte
 	err     error
+	// hold, when set, accepts records but never reports them sent, which is
+	// what a queue looks like between acceptance and an asynchronous failure.
+	hold bool
 }
 
-func (p *stubPublisher) Publish(_ context.Context, rec []byte) error {
+func (p *stubPublisher) Publish(_ context.Context, rec []byte, sent func()) error {
 	if p.err != nil {
 		return p.err
 	}
 	p.records = append(p.records, rec)
+	if !p.hold && sent != nil {
+		sent()
+	}
 	return nil
 }
 
@@ -396,4 +402,32 @@ func (stubEngineEmpty) Submit(ctx context.Context, topic string, obj []byte) (ov
 
 func (stubEngineEmpty) SubmitDetail(_ context.Context, topic string, _ []byte) (feed.Answer, error) {
 	return feed.Answer{Steak: overlay.Steak{topic: &overlay.AdmittanceInstructions{}}}, nil
+}
+
+// TestGuardMarksOnlyOnActualSend is the regression for stranding one hop
+// later. The facade used to mark the guard as soon as the queue ACCEPTED a
+// record; if the asynchronous send then failed, the mark stayed, and every
+// client retry was dropped as a loop while the client had been told 200
+// twice. The mark now comes from the publisher's sent callback.
+func TestGuardMarksOnlyOnActualSend(t *testing.T) {
+	pub := &stubPublisher{hold: true}
+	f, g := newFacade(t, &stubEngine{}, pub, "tm_example")
+
+	if rec := submit(t, f, "tm_example", beefObj); rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	if len(pub.records) != 1 {
+		t.Fatalf("published %d, want 1", len(pub.records))
+	}
+	// Accepted but never sent: the guard must NOT be marked, so a retry can
+	// still publish.
+	if _, known := g.Lookup(objfmt.ContentID(beefObj), objfmt.TopicID("tm_example")); known {
+		t.Fatal("guard marked on queue acceptance; a failed send would strand the object")
+	}
+	if rec := submit(t, f, "tm_example", beefObj); rec.Code != http.StatusOK {
+		t.Fatalf("retry code = %d", rec.Code)
+	}
+	if len(pub.records) != 2 {
+		t.Fatalf("retry published %d total, want 2: the first was never sent", len(pub.records))
+	}
 }

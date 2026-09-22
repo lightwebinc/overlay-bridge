@@ -36,14 +36,19 @@ type Stats struct {
 	UnknownTopic uint64
 	Rejected     uint64
 	// Sunk counts deliveries terminated with no engine configured (sink mode).
-	Sunk  uint64
+	Sunk uint64
+	// Shed counts deliveries refused because the engine queue was full. Each
+	// is an object the host did NOT receive from the plane. Non-zero means the
+	// engine cannot keep up with delivery and the host is relying on its own
+	// catch-up to close the gap.
+	Shed  uint64
 	Steak map[SteakKey]uint64
 }
 
 type counters struct {
-	mu                                                               sync.Mutex
-	submitted, engineError, parseError, unknownTopic, rejected, sunk uint64
-	steak                                                            map[SteakKey]uint64
+	mu                                                                     sync.Mutex
+	submitted, engineError, parseError, unknownTopic, rejected, sunk, shed uint64
+	steak                                                                  map[SteakKey]uint64
 }
 
 func (c *counters) add(field *uint64) {
@@ -71,6 +76,7 @@ func (c *counters) snapshot() Stats {
 		UnknownTopic: c.unknownTopic,
 		Rejected:     c.rejected,
 		Sunk:         c.sunk,
+		Shed:         c.shed,
 		Steak:        make(map[SteakKey]uint64, len(c.steak)),
 	}
 	for k, v := range c.steak {
