@@ -51,16 +51,16 @@ the rule is general.
 
 ## Open items
 
-**Unused Kafka client in the dependency tree.** Importing the shared
-lane-termination library pulls its observability package, which carries Kafka
-instrumentation for a sibling bridge, so nine Kafka packages link into this
-binary though this software opens no Kafka connection. Consequences: build
+**Unused Kafka client in the dependency tree: FIXED upstream.** Importing the
+shared lane-termination library used to pull its observability package, which
+carried Kafka instrumentation for a sibling bridge, so nine Kafka packages
+linked into this binary though this software opens no Kafka connection: build
 weight, a NOTICE entry for software we never call, and dependency-scanner
-findings against code that is unreachable here. The fix belongs upstream, by
-moving the Kafka instrumentation out of the package the lane terminator
-imports; it would need a new library tag and a re-pin here. Recorded rather
-than worked around: writing our own lane terminator to dodge it would be worse
-than carrying the dependency.
+findings against code unreachable here. The instrumentation moved to its own
+package in `teranode-bridge` v0.10.0, which only the Kafka user imports, and a
+regression test there pins the boundary. This repository pins v0.10.0 and
+links zero Kafka packages. Metric names were unchanged by the move, so no
+dashboard or alert followed it.
 
 **Publish-shed response code.** When the bounded publish queue is full the
 object is not on the plane. Returning 200 tells a client it published;

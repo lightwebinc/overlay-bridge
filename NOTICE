@@ -67,16 +67,7 @@ this notice does not modify those licenses.
   github.com/lightwebinc/shard-common         Apache License 2.0
   github.com/bsv-blockchain/go-sdk            Open BSV License Version 5
   github.com/prometheus/client_golang         Apache License 2.0
-  github.com/twmb/franz-go                    BSD 3-Clause License
-  github.com/klauspost/compress               BSD 3-Clause License
-  github.com/pierrec/lz4/v4                   BSD 3-Clause License
   google.golang.org/protobuf                  BSD 3-Clause License
-
-The Kafka client and its compression dependencies above are listed because
-they are linked into the binary, not because this software uses them. They
-arrive transitively with the shared lane-termination library, whose
-observability package carries Kafka instrumentation for a sibling bridge.
-This software opens no Kafka connection and has no Kafka configuration.
 
 © BSV Association,
 
