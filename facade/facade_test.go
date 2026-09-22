@@ -329,3 +329,71 @@ func TestMultiTopicPublishesOneRecordEach(t *testing.T) {
 		}
 	}
 }
+
+// TestReplyUsesTheWireFieldNames is the regression for a defect that a
+// stub-based test could not see and a real engine found immediately.
+//
+// The SDK's admittance type carries no JSON tags. Go decodes an engine's
+// camelCase reply into it happily, because the decoder is case-insensitive,
+// and then encodes it back out under Go's own field names. Relayed through
+// that type, `outputsToAdmit` becomes `OutputsToAdmit`: a real client reads
+// the field it knows, finds nothing, and concludes no output was admitted,
+// with a 200 and no error anywhere to explain it.
+//
+// The earlier version of this test passed while the bug was live, because its
+// stub produced and consumed the same Go types on both sides of the facade.
+// So this asserts the JSON text, not a round-tripped struct.
+func TestReplyUsesTheWireFieldNames(t *testing.T) {
+	f, _ := newFacade(t, &stubEngine{}, &stubPublisher{}, "tm_example")
+	rec := submit(t, f, "tm_example", beefObj)
+	body := rec.Body.String()
+
+	for _, want := range []string{`"outputsToAdmit"`, `"coinsToRetain"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("reply is missing %s: %s", want, body)
+		}
+	}
+	for _, unwanted := range []string{`"OutputsToAdmit"`, `"CoinsToRetain"`, `"CoinsRemoved"`} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("reply carries the Go field name %s; every real client reads the camelCase form: %s", unwanted, body)
+		}
+	}
+
+	// Decode the way a client does, and check it can actually see the
+	// admitted output rather than an absent field.
+	var got map[string]struct {
+		OutputsToAdmit []uint32 `json:"outputsToAdmit"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("a client could not decode the reply: %v", err)
+	}
+	if len(got["tm_example"].OutputsToAdmit) != 1 {
+		t.Fatalf("a client sees %d admitted outputs, want 1: %s", len(got["tm_example"].OutputsToAdmit), body)
+	}
+}
+
+// TestEmptyAdmittanceIsAnArrayNotNull pins the shape of the single most common
+// reply this facade relays: the engine's duplicate answer. A client that takes
+// the length of the field would crash on null.
+func TestEmptyAdmittanceIsAnArrayNotNull(t *testing.T) {
+	eng := &stubEngineEmpty{}
+	f, _ := newFacade(t, eng, &stubPublisher{}, "tm_example")
+	body := submit(t, f, "tm_example", beefObj).Body.String()
+	if strings.Contains(body, "null") {
+		t.Fatalf("an empty admittance was rendered with null: %s", body)
+	}
+	if !strings.Contains(body, `"outputsToAdmit":[]`) {
+		t.Fatalf("empty admittance is not an array: %s", body)
+	}
+}
+
+type stubEngineEmpty struct{}
+
+func (stubEngineEmpty) Submit(ctx context.Context, topic string, obj []byte) (overlay.Steak, error) {
+	a, err := stubEngineEmpty{}.SubmitDetail(ctx, topic, obj)
+	return a.Steak, err
+}
+
+func (stubEngineEmpty) SubmitDetail(_ context.Context, topic string, _ []byte) (feed.Answer, error) {
+	return feed.Answer{Steak: overlay.Steak{topic: &overlay.AdmittanceInstructions{}}}, nil
+}

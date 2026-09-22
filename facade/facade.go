@@ -244,9 +244,13 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 func writeSteak(w http.ResponseWriter, steak overlay.Steak, wrapped bool) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	var body any = steak
+	// Relay the WIRE form, not the SDK struct: the struct has no JSON tags,
+	// so encoding it emits Go field names and a client sees no admitted
+	// outputs. See wire.go.
+	w2 := wireSteak(steak)
+	var body any = w2
 	if wrapped {
-		body = map[string]any{"STEAK": steak}
+		body = map[string]any{"STEAK": w2}
 	}
 	_ = json.NewEncoder(w).Encode(body)
 }

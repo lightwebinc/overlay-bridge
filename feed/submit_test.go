@@ -33,15 +33,21 @@ func TestDecodeSteakBothEngines(t *testing.T) {
 		{"go engine wraps the answer", "steak_wrapped.json", 1},
 		{"typescript engine answers bare", "steak_bare.json", 1},
 		{"bare with nothing admitted", "steak_bare_empty.json", 0},
+		// Captured verbatim from a released engine rather than written by hand.
+		{"a real engine's reply", "steak_bare_real_engine.json", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			steak, err := decodeSteak(readFixture(t, tc.fixture))
 			if err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			ai, ok := steak["tm_example"]
+			topic := "tm_example"
+			if tc.fixture == "steak_bare_real_engine.json" {
+				topic = "tm_proof"
+			}
+			ai, ok := steak[topic]
 			if !ok || ai == nil {
-				t.Fatalf("no entry for tm_example in %v", steak)
+				t.Fatalf("no entry for %s in %v", topic, steak)
 			}
 			if got := len(ai.OutputsToAdmit); got != tc.admit {
 				t.Fatalf("outputsToAdmit = %d, want %d", got, tc.admit)

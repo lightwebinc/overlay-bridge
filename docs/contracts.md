@@ -18,6 +18,23 @@ bare map. Both are decoded. A client that understood only the wrapper would
 read every successful TypeScript submit as an absent entry and book an error
 on a success, which is why the bare branch is a requirement and not a hedge.
 
+## The reply is relayed in the WIRE form
+
+The SDK's admittance type carries no JSON tags. Go's decoder is
+case-insensitive, so reading an engine's camelCase reply into it works, and
+encoding it back out does not: the reply comes out under Go's own field names.
+Relayed that way, `outputsToAdmit` becomes `OutputsToAdmit`, a real client
+reads the field it knows, finds nothing, and concludes no output was admitted,
+with a 200 and no error anywhere to explain it.
+
+This was found by relaying a real engine's reply, in one request. Tests whose
+stub produced and consumed the same Go types on both sides of the facade all
+passed while it was live, which is the general lesson: a contract with another
+implementation cannot be verified against your own types.
+
+VERIFIED against a released `@bsv/overlay` v2.3.1 engine: the reply through
+the facade is byte-identical to the engine's own.
+
 ## Outcome vocabulary
 
 `admitted`, `empty`, `error`. `empty` is the engine's duplicate answer and the
