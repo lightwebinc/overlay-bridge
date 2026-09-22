@@ -249,15 +249,62 @@ func TestEngineErrorIsABadGateway(t *testing.T) {
 	}
 }
 
-// TestPublishFailureIsCounted pins that a failed publish is visible. The
-// object is admitted locally but is NOT on the plane, and reporting a clean
-// publish would make the bridge claim a publication it never made.
-func TestPublishFailureIsCounted(t *testing.T) {
+// TestPublishFailureIsVisibleToTheClient pins that a failed publish is not
+// reported as a success. The object is admitted locally but is NOT on the
+// plane, and answering 200 would make the bridge claim a publication it never
+// made, which is the one thing a publish interface must never do.
+func TestPublishFailureIsVisibleToTheClient(t *testing.T) {
 	pub := &stubPublisher{err: errors.New("queue full")}
 	f, _ := newFacade(t, &stubEngine{}, pub, "tm_example")
-	submit(t, f, "tm_example", beefObj)
+	rec := submit(t, f, "tm_example", beefObj)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code = %d, want 503", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("no Retry-After on a shed publish")
+	}
 	if f.Stats().PublishFailed != 1 {
 		t.Fatalf("stats = %+v", f.Stats())
+	}
+}
+
+// TestFailedPublishIsRetryable is the regression for a defect that stranded
+// objects silently.
+//
+// The guard used to be marked BEFORE the publish attempt. A publish that then
+// failed left the object marked, so every retry was dropped as a loop and the
+// object never reached the plane for the life of the guard entry, while the
+// client saw a clean answer. The registry has no way to take a mark back, so
+// the fix is to mark only after a publish succeeds.
+func TestFailedPublishIsRetryable(t *testing.T) {
+	pub := &stubPublisher{err: errors.New("queue full")}
+	f, g := newFacade(t, &stubEngine{}, pub, "tm_example")
+
+	if rec := submit(t, f, "tm_example", beefObj); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("first attempt: code = %d, want 503", rec.Code)
+	}
+	// Nothing was marked, so the object is still publishable.
+	if _, known := g.Lookup(objfmt.ContentID(beefObj), objfmt.TopicID("tm_example")); known {
+		t.Fatal("a failed publish marked the guard; every retry would now be dropped as a loop")
+	}
+
+	// The plane comes back and the client retries: it must publish this time.
+	pub.err = nil
+	if rec := submit(t, f, "tm_example", beefObj); rec.Code != http.StatusOK {
+		t.Fatalf("retry: code = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if len(pub.records) != 1 {
+		t.Fatalf("published %d records on retry, want 1", len(pub.records))
+	}
+	// ...and only now is it marked, so a further retry does not double-publish.
+	if _, known := g.Lookup(objfmt.ContentID(beefObj), objfmt.TopicID("tm_example")); !known {
+		t.Fatal("a successful publish did not mark the guard")
+	}
+	if rec := submit(t, f, "tm_example", beefObj); rec.Code != http.StatusOK {
+		t.Fatalf("second retry: code = %d", rec.Code)
+	}
+	if len(pub.records) != 1 {
+		t.Fatalf("published %d records total, want exactly 1", len(pub.records))
 	}
 }
 

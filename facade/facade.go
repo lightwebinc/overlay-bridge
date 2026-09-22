@@ -153,13 +153,27 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 	for _, name := range topics {
 		topicID := objfmt.TopicID(name)
 
-		// Mark BEFORE forwarding. This is the whole trick: an object the plane
-		// delivered was marked when it was delivered, so a client that reads
-		// from the plane and hands the same bytes to its own facade cannot
-		// push them back up the tunnel.
+		// Ask the guard, but do NOT mark yet. An object the plane delivered was
+		// marked Delivered when it was delivered, so a client that reads from
+		// the plane and hands the same bytes to its own facade is recognised
+		// here and never pushed back up the tunnel. That is the loop this
+		// guard exists to stop, and a read is enough to stop it.
+		//
+		// Marking only after a SUCCESSFUL publish is deliberate. Marking here
+		// would mean a publish that fails leaves the object marked, so every
+		// retry is dropped as a loop and the object is stranded off the plane
+		// for the life of the entry, while the client is told nothing is
+		// wrong. The registry has no way to take a mark back.
+		//
+		// The race this opens is one object published twice if two identical
+		// submissions are in flight at the same instant, and it is covered
+		// elsewhere: the fabric ingress claims the identical
+		// (ContentID, TopicID) key and drops the second. The guard is defence
+		// in depth on this path; the stranding it would cause has no second
+		// line at all.
 		var known bool
 		if f.cfg.Guard != nil {
-			_, known = f.cfg.Guard.Mark(contentID, topicID, registry.Submitted)
+			_, known = f.cfg.Guard.Lookup(contentID, topicID)
 		}
 
 		// Forward either way. A repeat is harmless: the host dedups it and
@@ -202,10 +216,23 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := f.cfg.Publish.Publish(ctx, record); err != nil {
-			// The object is admitted locally but is NOT on the plane. Say so
-			// rather than reporting a clean publish.
+			// The object is admitted locally but is NOT on the plane, and the
+			// guard is deliberately left unmarked so a retry can publish it.
+			//
+			// Say so with a status the client can act on. Answering 200 here
+			// would tell a client it published when it did not, which is the
+			// one thing a publish interface must never do; the local
+			// admittance is real but it is not what was asked for. A shed
+			// object is not billed, and this path books no delivered egress.
 			f.bump(&f.publishFailed)
 			f.logf("facade: publish failed; object is not on the plane", "topic", name, "err", err)
+			w.Header().Set("Retry-After", "1")
+			httpError(w, http.StatusServiceUnavailable,
+				"admitted locally but not published: the plane is unreachable or the publish queue is full; retry")
+			return
+		}
+		if f.cfg.Guard != nil {
+			f.cfg.Guard.Mark(contentID, topicID, registry.Submitted)
 		}
 	}
 

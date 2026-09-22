@@ -62,7 +62,19 @@ regression test there pins the boundary. This repository pins v0.10.0 and
 links zero Kafka packages. Metric names were unchanged by the move, so no
 dashboard or alert followed it.
 
-**Publish-shed response code.** When the bounded publish queue is full the
-object is not on the plane. Returning 200 tells a client it published;
-returning 503 makes a client retry into a queue that is still full. Whichever
-is chosen must not book delivered egress, because a shed object is not billed.
+**Publish-shed response code: SETTLED, 503 with `Retry-After`.** When the
+bounded publish queue is full, or the plane is unreachable, the object is not
+on the plane. Answering 200 would tell a client it published when it did not,
+which is the one thing a publish interface must never do; the local admittance
+is real but it is not what the client asked for. So the facade answers 503 and
+the client requeues. No delivered egress is booked on that path, because a shed
+object is not billed.
+
+This is only safe because a failed publish is genuinely retryable, which cost
+a defect to learn: the loop guard used to be marked BEFORE the publish attempt,
+so a failure left the object marked, every retry was dropped as a loop, and the
+object never reached the plane for the life of the guard entry while the client
+saw a clean answer. The registry has no way to take a mark back, so the guard
+is now marked only after a publish succeeds. The race that opens, two identical
+submissions in flight at the same instant, is closed by the fabric ingress,
+which claims the identical (ContentID, TopicID) key and drops the second.
