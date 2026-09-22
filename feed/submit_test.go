@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +32,8 @@ func TestDecodeSteakBothEngines(t *testing.T) {
 		admit   int
 	}{
 		{"go engine wraps the answer", "steak_wrapped.json", 1},
+		// Captured verbatim from a real go-overlay-services v1.3.5 server.
+		{"a real Go engine's reply", "steak_wrapped_real_engine.json", 1},
 		{"typescript engine answers bare", "steak_bare.json", 1},
 		{"bare with nothing admitted", "steak_bare_empty.json", 0},
 		// Captured verbatim from a released engine rather than written by hand.
@@ -42,7 +45,7 @@ func TestDecodeSteakBothEngines(t *testing.T) {
 				t.Fatalf("decode: %v", err)
 			}
 			topic := "tm_example"
-			if tc.fixture == "steak_bare_real_engine.json" {
+			if strings.HasSuffix(tc.fixture, "_real_engine.json") {
 				topic = "tm_proof"
 			}
 			ai, ok := steak[topic]

@@ -20,10 +20,32 @@ directly with no advertiser (the reference-host posture), and against the real
 | `isValidRootForHeight` | The real client returned true for the correct root and false for a wrong one, which is what proves the display-hex rendering |
 | The anchor height resolves through the fallback | Served from the header service, as a real deployment does |
 
-What this does NOT yet prove: the bridge has not run against a stock
-`overlay-express` server (route 2 of the propagation posture), and no run has
-been made against the Go engine, whose wire forms are covered by fixtures
-rather than by a live host.
+A second run the same day put a real `go-overlay-services` v1.3.5 engine
+behind its own HTTP server (a test-only in-memory store, not a storage
+implementation) and probed it directly. It confirmed three things the bridge
+relies on, and **corrected three claims that had been verified by reading the
+source rather than by running it**:
+
+| Claim | Real behaviour |
+| --- | --- |
+| The Go server mounts under `/api/v1` | CONFIRMED. `POST /submit` at the root is 404 |
+| It wraps the answer as `{"STEAK":{...}}` | CONFIRMED, captured as `feed/testdata/steak_wrapped_real_engine.json` |
+| A JSON-array `x-topics` fails there | CONFIRMED: the whole bracketed string is read as ONE topic name. But the status is **500**, not a 4xx, so it reads as a server fault rather than a bad request |
+| "A leading space fails the submit as an unknown topic" | **FALSE.** ` tm_proof` is accepted and the reply names `tm_proof`: the header binder trims. No error is logged |
+| "The binder reads only the first header value" | **FALSE.** Two `x-topics` headers produced an unknown-topic error naming the SECOND value, so repeated headers are combined rather than ignored |
+| An unknown topic | 500, like every other submit failure on that server |
+
+The bridge's own refusal of a topic containing a space or comma therefore
+stands as belt and braces rather than as the necessity it was documented to
+be. That is the right outcome, but the reason recorded for it was wrong.
+
+Also worth carrying: the two engines disagree on empty collections. The Go
+engine emits `coinsToRetain: null` where the TypeScript engine emits `[]`. A
+decoder that assumes either shape is wrong about one of them.
+
+What this still does NOT prove: the bridge has not run against a stock
+`overlay-express` server, which is propagation route 2 and needs a reachable
+wallet storage service.
 
 ## Submit request, the one form both engines accept
 
