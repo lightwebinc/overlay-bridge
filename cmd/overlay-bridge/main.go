@@ -240,7 +240,7 @@ func run(c config, log *slog.Logger) error {
 	return tasks.wait()
 }
 
-// headerHandler chains a header and teaches the tracker in one step.
+// headerHandler chains a header and advances the tracker's height in one step.
 //
 // Learn is the tracker's only writer of the reported height, so a lane reader
 // that forgets it leaves an engine asking how far the chain has got being told
@@ -254,8 +254,11 @@ func headerHandler(store *headers.Store, tracker *headers.Tracker) lanes.Handler
 			}
 			return err
 		}
-		if obs.Chained {
-			tracker.Learn(obs.Height, obs.Root)
+		if obs.Tip {
+			// Only the tip is progress. A competing header at a height already
+			// held is chained but is not the tip, and reporting it as the
+			// chain's height would move the height on a fork.
+			tracker.Learn(obs.Height)
 		}
 		return nil
 	}

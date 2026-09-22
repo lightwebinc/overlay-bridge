@@ -62,6 +62,15 @@ type RootSource interface {
 	RootAt(ctx context.Context, height uint32) (*chainhash.Hash, error)
 }
 
+// HeaderSource is a RootSource that can also name the block at a height. The
+// read API needs it to serve a height the lane never carried without inventing
+// a hash: a fallback that answers only roots leaves the hash unknown, and the
+// API then answers 404 rather than guess.
+type HeaderSource interface {
+	RootSource
+	HeaderForHeight(ctx context.Context, height uint32) (hash, root chainhash.Hash, err error)
+}
+
 // HeaderLookup resolves a header the lane did not carry, so the chain can
 // re-anchor across a gap instead of orphaning every header that follows. The
 // lane is a live tail: a consumer that connects late, or loses its connection
@@ -125,8 +134,24 @@ type Store struct {
 
 	opt Options
 
+	// fallbackRoots caches answers from the fallback, keyed by height. Roots
+	// below the anchor never change, and every verification of an old output
+	// would otherwise be a fresh round trip to the fallback on the engine's
+	// own verification path. Bounded by fallbackCap; cleared when full.
+	fallbackRoots map[uint32]chainhash.Hash
+
 	observed, rejected, orphaned, reanchored, replaced, pruned uint64
+	// Provenance of RootAt answers. Counted HERE because this is the path the
+	// engine's reads actually take (over the read API), so a counter kept on
+	// an in-process adapter that the engine never calls would read zero for
+	// the life of the process.
+	fromLane, fromFallback, misses uint64
 }
+
+// fallbackCap bounds the fallback root cache. When it fills the cache is
+// cleared rather than evicted entry by entry, which keeps the hot path free of
+// bookkeeping; a clear costs at most one round trip per height re-asked.
+const fallbackCap = 1 << 16
 
 var _ RootSource = (*Store)(nil)
 
@@ -139,13 +164,14 @@ func New(o Options) (*Store, error) {
 		o.LookupTimeout = 5 * time.Second
 	}
 	return &Store{
-		byHash: map[chainhash.Hash]uint32{o.Anchor.Hash: o.Anchor.Height},
-		at:     map[uint32]map[chainhash.Hash]entry{},
-		canon:  map[uint32]chainhash.Hash{},
-		tip:    o.Anchor.Hash,
-		tipH:   o.Anchor.Height,
-		lowest: o.Anchor.Height,
-		opt:    o,
+		byHash:        map[chainhash.Hash]uint32{o.Anchor.Hash: o.Anchor.Height},
+		at:            map[uint32]map[chainhash.Hash]entry{},
+		canon:         map[uint32]chainhash.Hash{},
+		tip:           o.Anchor.Hash,
+		tipH:          o.Anchor.Height,
+		lowest:        o.Anchor.Height,
+		opt:           o,
+		fallbackRoots: map[uint32]chainhash.Hash{},
 	}, nil
 }
 
@@ -319,7 +345,8 @@ func (s *Store) Tip() (chainhash.Hash, uint32) {
 }
 
 // RootAt serves the canonical chain's root for a height, falling back below
-// the anchor and across gaps.
+// the anchor and across gaps. Fallback answers are cached, and every answer is
+// booked by where it came from.
 func (s *Store) RootAt(ctx context.Context, height uint32) (*chainhash.Hash, error) {
 	s.mu.Lock()
 	hash, ok := s.canon[height]
@@ -327,15 +354,68 @@ func (s *Store) RootAt(ctx context.Context, height uint32) (*chainhash.Hash, err
 	if ok {
 		e, ok = s.at[height][hash]
 	}
-	s.mu.Unlock()
 	if ok {
+		s.fromLane++
+		s.mu.Unlock()
 		r := e.root
 		return &r, nil
 	}
+	if r, cached := s.fallbackRoots[height]; cached {
+		s.fromFallback++
+		s.mu.Unlock()
+		return &r, nil
+	}
+	s.mu.Unlock()
+
 	if s.opt.Fallback == nil {
+		s.bump(&s.misses)
 		return nil, fmt.Errorf("headers: height %d not on the lane and no fallback configured", height)
 	}
-	return s.opt.Fallback.RootAt(ctx, height)
+	r, err := s.opt.Fallback.RootAt(ctx, height)
+	if err != nil || r == nil {
+		s.bump(&s.misses)
+		return r, err
+	}
+	s.mu.Lock()
+	if len(s.fallbackRoots) >= fallbackCap {
+		s.fallbackRoots = map[uint32]chainhash.Hash{}
+	}
+	s.fallbackRoots[height] = *r
+	s.fromFallback++
+	s.mu.Unlock()
+	return r, nil
+}
+
+// HeaderForHeight names the block at a height and its root. For a height on
+// the lane the hash is the canonical one. For any other height the fallback
+// must be a HeaderSource that can name the block; otherwise the hash is
+// unknown and this reports so, because a read API that fills the gap with the
+// tip's hash hands a client a fabricated header identity with a 200.
+func (s *Store) HeaderForHeight(ctx context.Context, height uint32) (hash, root chainhash.Hash, known bool, err error) {
+	s.mu.Lock()
+	h, ok := s.canon[height]
+	var e entry
+	if ok {
+		e, ok = s.at[height][h]
+	}
+	if ok {
+		s.fromLane++
+		s.mu.Unlock()
+		return h, e.root, true, nil
+	}
+	s.mu.Unlock()
+	hs, can := s.opt.Fallback.(HeaderSource)
+	if !can {
+		s.bump(&s.misses)
+		return hash, root, false, fmt.Errorf("headers: height %d not on the lane and the fallback cannot name blocks", height)
+	}
+	hash, root, err = hs.HeaderForHeight(ctx, height)
+	if err != nil {
+		s.bump(&s.misses)
+		return hash, root, false, err
+	}
+	s.bump(&s.fromFallback)
+	return hash, root, false, nil
 }
 
 // Known reports whether the height's root came off the lane rather than the

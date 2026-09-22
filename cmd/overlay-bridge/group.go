@@ -34,6 +34,13 @@ func (g *group) go_(name string, fn func(context.Context) error) {
 		defer g.wg.Done()
 		err := fn(g.ctx)
 		if err == nil {
+			if g.ctx.Err() != nil {
+				// A task that returns nil once the context is cancelled has
+				// stopped cleanly. The lane terminator does exactly this on
+				// shutdown; treating it as a failure made every SIGTERM exit 1
+				// and read as a crash to whatever supervises the process.
+				return
+			}
 			err = errors.New("task returned with no error before shutdown")
 		}
 		g.fail(name, err)

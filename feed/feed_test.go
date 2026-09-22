@@ -226,3 +226,18 @@ func TestHandleCopiesBeforeHashing(t *testing.T) {
 		t.Fatal("the engine was handed an aliased buffer")
 	}
 }
+
+// TestSinkModeCountsAndDropsWithoutAnEngine is the regression for a nil
+// dereference: in sink mode there is no submitter, and a well-formed delivery
+// for an elected topic used to reach f.Submit.Submit on a nil interface and
+// take the whole bridge down on the first object.
+func TestSinkModeCountsAndDropsWithoutAnEngine(t *testing.T) {
+	f := &Feed{Topics: NewTopicMap([]string{"tm_example"}), Submit: nil}
+	rec := objfmt.EncodeBEEFDelivery(objfmt.TopicID("tm_example"), beefObj)
+	if err := f.Handle(context.Background(), rec); err != nil {
+		t.Fatalf("Handle in sink mode: %v", err)
+	}
+	if st := f.Stats(); st.Sunk != 1 || st.Submitted != 0 {
+		t.Fatalf("stats = %+v, want one sunk and none submitted", st)
+	}
+}

@@ -24,6 +24,12 @@ type Stats struct {
 	TipHeight uint32
 	// Heights is the number of retained canonical heights.
 	Heights int
+	// FromLane, FromFallback and Misses book where every root answered came
+	// from. This is the discriminator for the claim that verification is fed
+	// by the lane: a run in which every root was served by the fallback has
+	// not demonstrated it, and without counting the two apart nobody can tell
+	// the difference after the fact.
+	FromLane, FromFallback, Misses uint64
 }
 
 // Stats returns a counter snapshot.
@@ -31,13 +37,16 @@ func (s *Store) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Stats{
-		Observed:   s.observed,
-		Rejected:   s.rejected,
-		Orphaned:   s.orphaned,
-		Reanchored: s.reanchored,
-		Replaced:   s.replaced,
-		Pruned:     s.pruned,
-		TipHeight:  s.tipH,
-		Heights:    len(s.canon),
+		Observed:     s.observed,
+		Rejected:     s.rejected,
+		Orphaned:     s.orphaned,
+		Reanchored:   s.reanchored,
+		Replaced:     s.replaced,
+		Pruned:       s.pruned,
+		TipHeight:    s.tipH,
+		Heights:      len(s.canon),
+		FromLane:     s.fromLane,
+		FromFallback: s.fromFallback,
+		Misses:       s.misses,
 	}
 }

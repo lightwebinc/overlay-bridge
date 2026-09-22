@@ -35,13 +35,15 @@ type Stats struct {
 	ParseError   uint64
 	UnknownTopic uint64
 	Rejected     uint64
-	Steak        map[SteakKey]uint64
+	// Sunk counts deliveries terminated with no engine configured (sink mode).
+	Sunk  uint64
+	Steak map[SteakKey]uint64
 }
 
 type counters struct {
-	mu                                                         sync.Mutex
-	submitted, engineError, parseError, unknownTopic, rejected uint64
-	steak                                                      map[SteakKey]uint64
+	mu                                                               sync.Mutex
+	submitted, engineError, parseError, unknownTopic, rejected, sunk uint64
+	steak                                                            map[SteakKey]uint64
 }
 
 func (c *counters) add(field *uint64) {
@@ -68,6 +70,7 @@ func (c *counters) snapshot() Stats {
 		ParseError:   c.parseError,
 		UnknownTopic: c.unknownTopic,
 		Rejected:     c.rejected,
+		Sunk:         c.sunk,
 		Steak:        make(map[SteakKey]uint64, len(c.steak)),
 	}
 	for k, v := range c.steak {

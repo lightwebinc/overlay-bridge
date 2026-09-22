@@ -34,12 +34,12 @@ func TestCurrentHeightReadsZeroUntilLearned(t *testing.T) {
 	if h, err := tr.CurrentHeight(context.Background()); err != nil || h != 0 {
 		t.Fatalf("CurrentHeight = %d/%v, want 0", h, err)
 	}
-	tr.Learn(812345, rootN(7))
+	tr.Learn(812345)
 	if h, _ := tr.CurrentHeight(context.Background()); h != 812345 {
 		t.Fatalf("CurrentHeight = %d after Learn, want 812345", h)
 	}
-	// Height never goes backwards on an older root arriving.
-	tr.Learn(1000, rootN(8))
+	// Height never goes backwards.
+	tr.Learn(1000)
 	if h, _ := tr.CurrentHeight(context.Background()); h != 812345 {
 		t.Fatalf("CurrentHeight went backwards to %d", h)
 	}
@@ -63,70 +63,86 @@ func TestIsValidRootForHeight(t *testing.T) {
 	}
 }
 
-func TestTrackerCachesAndCountsProvenance(t *testing.T) {
-	want := rootN(3)
-	src := &stubSource{roots: map[uint32]chainhash.Hash{101: want}}
-	tr := NewTracker(src)
-
-	for i := 0; i < 3; i++ {
-		if ok, err := tr.IsValidRootForHeight(context.Background(), &want, 101); err != nil || !ok {
-			t.Fatalf("lookup %d: %v/%v", i, ok, err)
-		}
-	}
-	if src.calls != 1 {
-		t.Fatalf("source called %d times, want 1: the cache is not in front", src.calls)
-	}
-	// The source is a bare stub, not a Store, so it cannot claim lane
-	// provenance: the first answer books as fallback, the rest as cache.
-	st := tr.Stats()
-	if st.FromFallback != 1 || st.FromLane != 2 {
-		t.Fatalf("stats = %+v", st)
-	}
-}
-
-// TestFallbackAnswerDoesNotAdvanceHeight pins that a backfilled root is not
-// evidence of how far THIS host's view of the chain has got. Advancing the
-// height from a fallback would let a host with a dead lane report a healthy
-// tip.
-func TestFallbackAnswerDoesNotAdvanceHeight(t *testing.T) {
-	want := rootN(3)
-	tr := NewTracker(&stubSource{roots: map[uint32]chainhash.Hash{900000: want}})
-	if _, err := tr.IsValidRootForHeight(context.Background(), &want, 900000); err != nil {
-		t.Fatalf("lookup: %v", err)
-	}
-	if h, _ := tr.CurrentHeight(context.Background()); h != 0 {
-		t.Fatalf("height advanced to %d from a fallback answer", h)
-	}
-}
-
 func TestTrackerPropagatesSourceError(t *testing.T) {
 	tr := NewTracker(&stubSource{err: errors.New("no such height")})
 	r := rootN(1)
 	if _, err := tr.IsValidRootForHeight(context.Background(), &r, 5); err == nil {
 		t.Fatal("source error was swallowed")
 	}
-	if tr.Stats().Misses != 1 {
-		t.Fatalf("stats = %+v", tr.Stats())
+}
+
+// TestTrackerFollowsTheCanonicalChain is the regression for a poisoned cache.
+// The tracker used to cache every root the lane delivered, so a competing
+// header at a height already held overwrote the cached root although the
+// store's canonical chain had not changed, and the tracker then answered true
+// for a root the chain did not commit to. It holds no cache now, and this
+// pins that its answer tracks the store through a fork and a reorganisation.
+func TestTrackerFollowsTheCanonicalChain(t *testing.T) {
+	s := newStore(t, Options{MinBits: easyBits})
+	tr := NewTracker(s)
+	anchor, _ := s.Tip()
+
+	a1 := mineHeader(t, anchor, rootN(1), easyBits)
+	obsA1, _ := s.Observe(context.Background(), a1)
+	if ok, _ := tr.IsValidRootForHeight(context.Background(), &obsA1.Root, 101); !ok {
+		t.Fatal("canonical root at 101 not valid")
+	}
+
+	// A competing header at 101 that does NOT become the tip.
+	b1 := mineHeader(t, anchor, rootN(2), easyBits)
+	obsB1, _ := s.Observe(context.Background(), b1)
+	if obsB1.Tip {
+		t.Fatal("test setup: b1 unexpectedly became the tip")
+	}
+	// The tracker must still answer for a1's root, not b1's.
+	if ok, _ := tr.IsValidRootForHeight(context.Background(), &obsA1.Root, 101); !ok {
+		t.Fatal("a competing non-tip header displaced the canonical root")
+	}
+	if ok, _ := tr.IsValidRootForHeight(context.Background(), &obsB1.Root, 101); ok {
+		t.Fatal("a competing non-tip header's root was answered as valid")
+	}
+
+	// Now extend b's branch so it reorganises the chain: the tracker's answer
+	// must follow, with no stale cache to hold the old root.
+	b2 := mineHeader(t, obsB1.Hash, rootN(3), easyBits)
+	if obs, _ := s.Observe(context.Background(), b2); !obs.Tip {
+		t.Fatal("test setup: b2 did not become the tip")
+	}
+	if ok, _ := tr.IsValidRootForHeight(context.Background(), &obsB1.Root, 101); !ok {
+		t.Fatal("after the reorg, b1's root should now be canonical at 101")
+	}
+	if ok, _ := tr.IsValidRootForHeight(context.Background(), &obsA1.Root, 101); ok {
+		t.Fatal("after the reorg, a1's root was still answered as valid")
 	}
 }
 
-// TestTrackerOverStoreBooksLaneProvenance wires the real pair, which is what
-// makes the "SPV is fed by the lane" claim checkable rather than assumed.
-func TestTrackerOverStoreBooksLaneProvenance(t *testing.T) {
-	s := newStore(t, Options{MinBits: easyBits})
+// TestStoreBooksProvenanceOnTheServedPath pins that provenance is counted
+// where the engine's reads actually go. An earlier version counted it on the
+// in-process tracker, which the engine never calls, so the series that exists
+// to prove "verification is fed by the lane" read zero for ever.
+func TestStoreBooksProvenanceOnTheServedPath(t *testing.T) {
+	fb := &stubSource{roots: map[uint32]chainhash.Hash{50: rootN(9)}}
+	s := newStore(t, Options{MinBits: easyBits, Fallback: fb})
 	anchor, _ := s.Tip()
-	hdr := mineHeader(t, anchor, rootN(1), easyBits)
-	obs, err := s.Observe(context.Background(), hdr)
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	tr := NewTracker(s)
+	obs, _ := s.Observe(context.Background(), mineHeader(t, anchor, rootN(1), easyBits))
 
-	ok, err := tr.IsValidRootForHeight(context.Background(), &obs.Root, obs.Height)
-	if err != nil || !ok {
-		t.Fatalf("root from the lane: %v/%v", ok, err)
+	if _, err := s.RootAt(context.Background(), obs.Height); err != nil {
+		t.Fatalf("lane root: %v", err)
 	}
-	if st := tr.Stats(); st.FromLane != 1 || st.FromFallback != 0 {
-		t.Fatalf("stats = %+v, want the answer booked to the lane", st)
+	for i := 0; i < 3; i++ {
+		if _, err := s.RootAt(context.Background(), 50); err != nil {
+			t.Fatalf("fallback root: %v", err)
+		}
+	}
+	if _, err := s.RootAt(context.Background(), 999999); err == nil {
+		// no fallback entry, so the stub returns nil,nil: a miss
+	}
+	st := s.Stats()
+	if st.FromLane != 1 || st.FromFallback != 3 {
+		t.Fatalf("provenance = lane %d / fallback %d, want 1 / 3", st.FromLane, st.FromFallback)
+	}
+	// ...and the fallback was asked ONCE for the three answers: cached.
+	if fb.calls != 2 { // one for height 50, one for the miss at 999999
+		t.Fatalf("fallback called %d times, want 2 (height 50 cached after the first)", fb.calls)
 	}
 }

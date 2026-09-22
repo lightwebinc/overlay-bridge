@@ -3,9 +3,12 @@ package headers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 )
 
 func apiWithOneHeader(t *testing.T) (*API, Observation) {
@@ -110,5 +113,49 @@ func TestServeRefusesWithNoAddress(t *testing.T) {
 	a := &API{Store: newStore(t, Options{})}
 	if err := a.Serve(context.Background()); err == nil {
 		t.Fatal("Serve with no address returned nil")
+	}
+}
+
+type namingFallback struct{ stubSource }
+
+func (n *namingFallback) HeaderForHeight(_ context.Context, h uint32) (chainhash.Hash, chainhash.Hash, error) {
+	r, ok := n.roots[h]
+	if !ok {
+		return chainhash.Hash{}, chainhash.Hash{}, errors.New("unknown")
+	}
+	var hash chainhash.Hash
+	hash[0] = byte(h) // a distinct, recognisable hash per height
+	return hash, r, nil
+}
+
+// TestChaintracksNeverFabricatesAHash is the regression for a fallback height
+// answered with the TIP's hash. A chaintracks client keys headers by hash, so
+// a wrong hash under a 200 is a fabricated header identity: the worst failure
+// available here.
+func TestChaintracksNeverFabricatesAHash(t *testing.T) {
+	// A fallback that answers roots but cannot name blocks: the route must 404
+	// rather than guess.
+	s := newStore(t, Options{MinBits: easyBits, Fallback: &stubSource{roots: map[uint32]chainhash.Hash{50: rootN(9)}}})
+	a := &API{Store: s}
+	if rec, _ := get(t, a.Handler(), "/chaintracks/v2/header/height/50"); rec.Code != http.StatusNotFound {
+		t.Fatalf("root-only fallback: code = %d, want 404 rather than a fabricated hash", rec.Code)
+	}
+
+	// A fallback that CAN name blocks: the real hash is served.
+	nf := &namingFallback{stubSource{roots: map[uint32]chainhash.Hash{50: rootN(9)}}}
+	s2 := newStore(t, Options{MinBits: easyBits, Fallback: nf})
+	a2 := &API{Store: s2}
+	rec, body := get(t, a2.Handler(), "/chaintracks/v2/header/height/50")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("naming fallback: code = %d", rec.Code)
+	}
+	tip, _ := s2.Tip()
+	if body["hash"] == tip.String() {
+		t.Fatalf("fallback height was answered with the tip's hash: %v", body)
+	}
+	var want chainhash.Hash
+	want[0] = 50
+	if body["hash"] != want.String() {
+		t.Fatalf("hash = %v, want the fallback's %s", body["hash"], want.String())
 	}
 }

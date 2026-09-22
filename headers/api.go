@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/bsv-blockchain/go-sdk/chainhash"
 )
 
 // DefaultChaintracksPrefix is where a stock overlay-express host looks for the
@@ -98,23 +96,22 @@ func (a *API) Handler() http.Handler {
 		if !ok {
 			return
 		}
-		root, err := a.Store.RootAt(r.Context(), h)
-		if err != nil || root == nil {
-			// 404 is the correct answer for a height we do not hold. The
-			// client turns it into "no header", and turns any other non-ok
-			// status into a thrown exception, so answering 200-with-zeroes or
-			// 500 here converts "not yet" into an incident.
+		hash, root, _, err := a.Store.HeaderForHeight(r.Context(), h)
+		if err != nil {
+			// 404 is the correct answer for a height we cannot serve WITH ITS
+			// HASH. The client turns 404 into "no header" and any other
+			// non-ok status into a thrown exception. An earlier version filled
+			// an unknown hash with the current tip's, which handed the client
+			// a fabricated header identity under a 200: the worst failure
+			// available here, because a chaintracks client keys headers by
+			// hash.
 			w.WriteHeader(http.StatusNotFound)
 			return
-		}
-		hash, _ := a.Store.Tip()
-		if canon, ok := a.Store.hashAt(h); ok {
-			hash = canon
 		}
 		// The caller compares merkleRoot as a STRING against the root it
 		// holds, so the rendering has to be the SDK's display hex exactly. A
 		// byte-reversed or 0x-prefixed value fails every comparison while
-		// returning 200, which is the worst failure available here.
+		// returning 200.
 		writeJSON(w, http.StatusOK, map[string]any{
 			"height":     h,
 			"hash":       hash.String(),
@@ -126,14 +123,6 @@ func (a *API) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 	return mux
-}
-
-// hashAt returns the canonical hash at a height.
-func (s *Store) hashAt(height uint32) (chainhash.Hash, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, ok := s.canon[height]
-	return h, ok
 }
 
 // Serve runs the API on every configured address until ctx is cancelled.

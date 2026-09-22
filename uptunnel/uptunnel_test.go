@@ -186,19 +186,19 @@ func TestQueueShedsRatherThanGrows(t *testing.T) {
 	}
 }
 
-// TestQueueCopiesTheRecord pins that the queue does not alias a caller's
-// buffer. The facade hands it a request body it may reuse, and the queue
-// outlives the call.
-func TestQueueCopiesTheRecord(t *testing.T) {
+// TestQueueTakesOwnership pins the contract: the queue holds the caller's
+// buffer rather than copying it, so the caller must hand over a buffer it will
+// not reuse. The copy this replaced doubled every publish's allocation on the
+// client's synchronous request path, for a caller that never aliased.
+func TestQueueTakesOwnership(t *testing.T) {
 	q := NewQueue(&Client{}, 4, nil)
 	rec := []byte{1, 2, 3}
 	if err := q.Publish(context.Background(), rec); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	rec[0] = 0xFF
 	got := <-q.ch
-	if got[0] != 1 {
-		t.Fatalf("queue aliased the caller's buffer: got %v", got)
+	if &got[0] != &rec[0] {
+		t.Fatal("queue copied the record; the contract is ownership transfer")
 	}
 }
 

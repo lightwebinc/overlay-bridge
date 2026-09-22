@@ -28,6 +28,7 @@ type anchorClient struct {
 
 var (
 	_ headers.RootSource   = (*anchorClient)(nil)
+	_ headers.HeaderSource = (*anchorClient)(nil)
 	_ headers.HeaderLookup = (*anchorClient)(nil)
 )
 
@@ -89,6 +90,27 @@ func (a *anchorClient) RootAt(ctx context.Context, height uint32) (*chainhash.Ha
 		return nil, err
 	}
 	return chainhash.NewHashFromHex(b.MerkleRoot)
+}
+
+// HeaderForHeight names the block at a height, so the read API can serve a
+// pre-anchor height with its real hash rather than none.
+func (a *anchorClient) HeaderForHeight(ctx context.Context, height uint32) (chainhash.Hash, chainhash.Hash, error) {
+	var b headerBody
+	if err := a.get(ctx, fmt.Sprintf("/v1/root/%d", height), &b); err != nil {
+		return chainhash.Hash{}, chainhash.Hash{}, err
+	}
+	root, err := chainhash.NewHashFromHex(b.MerkleRoot)
+	if err != nil {
+		return chainhash.Hash{}, chainhash.Hash{}, fmt.Errorf("root at %d: %w", height, err)
+	}
+	if b.Hash == "" {
+		return chainhash.Hash{}, chainhash.Hash{}, fmt.Errorf("header service names no block hash for height %d", height)
+	}
+	hash, err := chainhash.NewHashFromHex(b.Hash)
+	if err != nil {
+		return chainhash.Hash{}, chainhash.Hash{}, fmt.Errorf("hash at %d: %w", height, err)
+	}
+	return *hash, *root, nil
 }
 
 func (a *anchorClient) HeaderAt(ctx context.Context, hash chainhash.Hash) (uint32, chainhash.Hash, error) {

@@ -133,6 +133,13 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		f.Guard.Mark(contentID, topicID, registry.Delivered)
 	}
 
+	if f.Submit == nil {
+		// Sink mode: terminate and count, submit nowhere. Without this a
+		// well-formed delivery for an elected topic would dereference a nil
+		// interface in the lane goroutine and take the whole bridge down.
+		f.c.add(&f.c.sunk)
+		return nil
+	}
 	steak, err := f.Submit.Submit(ctx, name, owned)
 	if err != nil {
 		f.c.add(&f.c.engineError)

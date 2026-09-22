@@ -86,6 +86,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descFeed, s.ParseError, "parse_error")
 		counter(ch, descFeed, s.UnknownTopic, "unknown_topic")
 		counter(ch, descFeed, s.Rejected, "rejected")
+		counter(ch, descFeed, s.Sunk, "sunk")
 		for k, v := range s.Steak {
 			counter(ch, descSteak, v, k.Topic, k.Outcome)
 		}
@@ -100,8 +101,13 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descHeaders, s.Pruned, "pruned")
 		gauge(ch, descTip, float64(s.TipHeight))
 	}
-	if c.tracker != nil {
-		s := c.tracker.Stats()
+	if c.store != nil {
+		// Provenance comes from the store because that is the path the
+		// engine's reads take (over the read API). An earlier version read it
+		// from the in-process tracker, which the engine never calls, so the
+		// series was zero for the life of the process and the claim it exists
+		// to prove was undecidable from it.
+		s := c.store.Stats()
 		counter(ch, descRoots, s.FromLane, "lane")
 		counter(ch, descRoots, s.FromFallback, "fallback")
 		counter(ch, descRoots, s.Misses, "miss")

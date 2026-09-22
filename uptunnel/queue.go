@@ -46,7 +46,8 @@ func NewQueue(c *Client, depth int, log *slog.Logger) *Queue {
 }
 
 // Publish enqueues one record without blocking. It returns [ErrQueueFull] when
-// the queue is full, and the record is then not published.
+// the queue is full, and the record is then not published. The queue takes
+// ownership of record; the caller must not touch it afterwards.
 //
 // The caller owns the decision about what that means to its own client. The
 // standing ruling is that a shed object is NOT billed, so whatever status a
@@ -55,12 +56,12 @@ func (q *Queue) Publish(ctx context.Context, record []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// The record may alias a request body the caller reuses; the queue outlives
-	// the call, so it holds its own copy.
-	cp := make([]byte, len(record))
-	copy(cp, record)
+	// The queue takes OWNERSHIP of record: the caller must not reuse or modify
+	// it after Publish returns. Copying here would double the allocation of
+	// every publish on the client's synchronous request path, and the one
+	// caller already hands over a freshly encoded buffer.
 	select {
-	case q.ch <- cp:
+	case q.ch <- record:
 		q.enqueued.Add(1)
 		return nil
 	default:

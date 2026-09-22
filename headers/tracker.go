@@ -8,78 +8,66 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction/chaintracker"
 )
 
-// Tracker adapts a RootSource to the SDK's ChainTracker, with a cache in front
-// and a record of where each answer came from.
+// Tracker adapts a RootSource to the SDK's ChainTracker for an in-process Go
+// consumer.
 //
-// The provenance record is not bookkeeping. The claim this bridge makes is
-// that SPV inside the engine is fed by the header lane; a run in which every
-// root was served by the fallback has not demonstrated that claim, and without
-// counting the two apart nobody can tell the difference after the fact.
+// It holds NO cache of roots. An earlier version cached every root the lane
+// delivered, and that cache could diverge from the store's canonical chain in
+// two ways that a chain tracker must never allow: a competing header at a
+// height already held overwrote the cached root although the store's
+// canonical chain had not changed, and a reorganisation rewrote the store's
+// canonical chain while the cache kept the old roots for ever. Either way the
+// tracker would answer true for a root the chain no longer commits to. The
+// store already answers a root in one map lookup and already caches fallback
+// answers, so there is nothing for a second cache to buy that is worth that.
+//
+// Provenance of answers is booked by the store, not here, because the path the
+// engine's reads actually take is the read API over the store, which never
+// touches this adapter.
 type Tracker struct {
 	src RootSource
 
 	mu     sync.RWMutex
-	cache  map[uint32]chainhash.Hash
 	height uint32
-
-	fromLane, fromFallback, misses uint64
 }
 
 var _ chaintracker.ChainTracker = (*Tracker)(nil)
 
 // NewTracker returns a tracker over src.
 func NewTracker(src RootSource) *Tracker {
-	return &Tracker{src: src, cache: map[uint32]chainhash.Hash{}}
+	return &Tracker{src: src}
 }
 
-// Learn records a root the lane delivered and advances the reported height.
+// Learn advances the reported height. Call it when a header becomes the
+// TIP, not for every header that chains: a competing header at a height
+// already held is chained but is not the tip, and must not be reported as
+// progress.
 //
-// The lane reader MUST call this for every accepted observation. It is the
-// only writer of the tracker's height, and an engine asking how far the chain
-// has got is told zero until it is called: a host that answers roots but
-// reports height zero looks to an engine like a chain that has not started.
-func (t *Tracker) Learn(height uint32, root chainhash.Hash) {
+// The lane reader MUST call this. It is the only writer of the tracker's
+// height, and an engine asking how far the chain has got is told zero until
+// it is called: a host that answers roots but reports height zero looks to an
+// engine like a chain that has not started.
+func (t *Tracker) Learn(height uint32) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.cache[height] = root
 	if height > t.height {
 		t.height = height
 	}
 }
 
 // IsValidRootForHeight reports whether root is the merkle root committed at
-// height.
+// height, asking the source every time so the answer always follows the
+// canonical chain.
 func (t *Tracker) IsValidRootForHeight(ctx context.Context, root *chainhash.Hash, height uint32) (bool, error) {
 	if root == nil {
 		return false, nil
 	}
-	t.mu.RLock()
-	cached, ok := t.cache[height]
-	t.mu.RUnlock()
-	if ok {
-		t.count(&t.fromLane)
-		return cached.IsEqual(root), nil
-	}
 	got, err := t.src.RootAt(ctx, height)
 	if err != nil {
-		t.count(&t.misses)
 		return false, err
 	}
 	if got == nil {
-		t.count(&t.misses)
 		return false, nil
-	}
-	// Learn it, but do NOT advance the reported height from a fallback answer:
-	// the height is a claim about how far this host's own view of the chain
-	// has got, and a backfilled root from elsewhere is not evidence of that.
-	t.mu.Lock()
-	t.cache[height] = *got
-	t.mu.Unlock()
-
-	if lane, isStore := t.src.(interface{ Known(uint32) bool }); isStore && lane.Known(height) {
-		t.count(&t.fromLane)
-	} else {
-		t.count(&t.fromFallback)
 	}
 	return got.IsEqual(root), nil
 }
@@ -92,20 +80,4 @@ func (t *Tracker) CurrentHeight(_ context.Context) (uint32, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.height, nil
-}
-
-// TrackerStats reports where answers came from.
-type TrackerStats struct{ FromLane, FromFallback, Misses uint64 }
-
-// Stats returns a snapshot.
-func (t *Tracker) Stats() TrackerStats {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return TrackerStats{FromLane: t.fromLane, FromFallback: t.fromFallback, Misses: t.misses}
-}
-
-func (t *Tracker) count(p *uint64) {
-	t.mu.Lock()
-	*p++
-	t.mu.Unlock()
 }
