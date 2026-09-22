@@ -24,7 +24,7 @@ test:                  ## go test ./...
 race:                  ## go test -race ./...
 	go test -race -count=1 $(PKG)
 
-verify: fmt-check vet race   ## what CI runs: formatting, vet, tests under -race
+verify: fmt-check vet race licences   ## what CI runs: formatting, vet, tests under -race, licence freshness
 
 fmt-check:             ## fail if anything is unformatted
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "unformatted:"; echo "$$out"; exit 1; fi
@@ -51,3 +51,9 @@ ci: verify             ## alias, so CI and a developer run the same target
 
 help:                  ## list targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
+
+licences:              ## fail if LICENSE-THIRD-PARTY is stale
+	python3 scripts/gen-third-party-licenses.py . --check
+
+licences-update:       ## regenerate LICENSE-THIRD-PARTY from what the binary links
+	python3 scripts/gen-third-party-licenses.py .
