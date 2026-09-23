@@ -35,6 +35,9 @@ type config struct {
 	beefLane   string
 	headerLane string
 	topics     string
+	subURL     string
+	subID      string
+	subToken   string
 
 	engine        string
 	engineTimeout time.Duration
@@ -69,6 +72,9 @@ func main() {
 	flag.StringVar(&c.beefLane, "beef-lane", "[::]:9171", "BRC-149 delivery-record lane; the edge dials this")
 	flag.StringVar(&c.headerLane, "header-lane", "[::]:9172", "BRC-135 bare header lane; the edge dials this")
 	flag.StringVar(&c.topics, "topics", "", "comma list of elected topic names")
+	flag.StringVar(&c.subURL, "subscription-url", "", "broker base URL; when set, -topics is reconciled against the consumer's election at startup")
+	flag.StringVar(&c.subID, "subscription-consumer", "", "consumer id to reconcile -topics against")
+	flag.StringVar(&c.subToken, "subscription-token", "", "bearer token for the broker read; prefer OVERLAY_BRIDGE_SUBSCRIPTION_TOKEN")
 	flag.StringVar(&c.engine, "engine", "", "BRC-22 submit base, root-mounted, no /api/v1 prefix")
 	flag.DurationVar(&c.engineTimeout, "engine-timeout", 30*time.Second, "per-submit ceiling")
 	flag.IntVar(&c.engineWorkers, "engine-workers", 4, "concurrent engine submits; the lane never waits on the engine")
@@ -114,6 +120,7 @@ func run(c config, log *slog.Logger) error {
 	log.Info("overlay-bridge starting", "version", Version, "mode", c.mode)
 
 	names := splitList(c.topics)
+	reconcileTopics(ctx, c, names, log)
 	g := guard.New(c.guardTTL, c.guardEntries)
 
 	// ---- headers: the chain tracker the engine verifies against.
