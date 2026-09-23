@@ -1,0 +1,7 @@
+POST /submit HTTP/1.1
+Accept: */*
+Content-Type: application/octet-stream
+x-topics: tm_orders,tm_audit
+Content-Length: 144
+
+<144 bytes of BEEF, octet-stream, verbatim>
