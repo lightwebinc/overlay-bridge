@@ -413,3 +413,67 @@ func TestReanchoredRootBooksAgainstTheAnchor(t *testing.T) {
 		t.Fatalf("after reading the lane's own header: stats = %+v, want FromFallback 1 and FromLane 1", st)
 	}
 }
+
+// TestLateLaneDeliveryClearsAnchorProvenance is a defect found by auditing a
+// LIVE run, not by reading the code: overlay-us-1 held two heights (471, 474)
+// permanently reporting known:false although the lane had delivered them.
+//
+// Re-anchoring fetches a missing parent from the anchor and marks it
+// viaAnchor. When the lane later delivers that same header — which happens
+// whenever the lane is merely LATE rather than missing — Observe took the
+// re-delivery fast path and returned without touching provenance, so a header
+// this host received first-hand kept reporting as a third party's answer for
+// ever. That under-reports the lane in the one metric that is supposed to
+// prove the lane feeds verification, which is the opposite of the bug the
+// viaAnchor flag was added to fix.
+func TestLateLaneDeliveryClearsAnchorProvenance(t *testing.T) {
+	lk := &stubLookup{height: 200, root: rootN(9)}
+	s := newStore(t, Options{MinBits: easyBits, Lookup: lk})
+
+	// A REAL parent the lane has not delivered yet, and its child. The parent
+	// is mined so the test holds its actual bytes: the store keys on a
+	// header's own hash, so a late delivery has to be the same header, not a
+	// stand-in.
+	var root200 chainhash.Hash
+	root200[0] = 0xA1
+	parent := mineHeader(t, root200, rootN(7), easyBits)
+	parentHash := headerHash(parent)
+	child := mineHeader(t, parentHash, rootN(1), easyBits)
+
+	// The child arrives first: its parent is unknown, so the store re-anchors
+	// it from the anchor and marks it viaAnchor.
+	obs, err := s.Observe(context.Background(), child)
+	if err != nil {
+		t.Fatalf("Observe child: %v", err)
+	}
+	if !obs.Reanchor {
+		t.Fatalf("obs = %+v, want a re-anchor", obs)
+	}
+	if _, _, received, ok := s.HeaderByHash(parentHash); !ok || received {
+		t.Fatalf("before: HeaderByHash received=%v ok=%v, want held but NOT received", received, ok)
+	}
+	if _, err := s.RootAt(context.Background(), 200); err != nil {
+		t.Fatalf("RootAt(200): %v", err)
+	}
+	if st := s.Stats(); st.FromFallback != 1 || st.FromLane != 0 {
+		t.Fatalf("before the late delivery: stats = %+v, want FromFallback 1 FromLane 0", st)
+	}
+
+	// The lane now delivers that same header, late. Provenance must flip to
+	// first-hand; the chain itself must not change.
+	if _, err := s.Observe(context.Background(), parent); err != nil {
+		t.Fatalf("Observe late parent: %v", err)
+	}
+	if _, _, received, ok := s.HeaderByHash(parentHash); !ok || !received {
+		t.Fatalf("after the late delivery: HeaderByHash received=%v ok=%v, want RECEIVED", received, ok)
+	}
+	if !s.Known(200) {
+		t.Fatalf("Known(200) is false after the lane delivered that header")
+	}
+	if _, err := s.RootAt(context.Background(), 200); err != nil {
+		t.Fatalf("RootAt(200) after: %v", err)
+	}
+	if st := s.Stats(); st.FromLane != 1 || st.FromFallback != 1 {
+		t.Fatalf("after: stats = %+v, want FromLane 1 (the promoted read) and FromFallback still 1", st)
+	}
+}
