@@ -2,6 +2,8 @@ package main
 
 import (
 	"net/http"
+	"runtime"
+	"runtime/debug"
 
 	"github.com/lightwebinc/overlay-bridge/facade"
 	"github.com/lightwebinc/overlay-bridge/feed"
@@ -57,6 +59,9 @@ var (
 		"Objects read off a lane, by lane and outcome.", []string{"lane", "outcome"}, nil)
 	descLaneConns = prometheus.NewDesc("overlay_bridge_lane_connections_active",
 		"Connections open on a lane right now.", []string{"lane"}, nil)
+	descBuild = prometheus.NewDesc("overlay_bridge_build_info",
+		"Always 1. Labels carry what this BINARY links, read from the embedded build info, not from go.mod. A deployed binary keeps the dependency it was built with for ever and nothing else on the host says which.",
+		[]string{"version", "shard_common", "go_sdk", "go_version"}, nil)
 	descLaneBound = prometheus.NewDesc("overlay_bridge_lane_bound",
 		"1 when a lane's listener is open.", []string{"lane"}, nil)
 )
@@ -64,7 +69,8 @@ var (
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
 		descFeed, descSteak, descHeaders, descTip, descRoots, descFacade,
-		descQueue, descQueueDepth, descGuard, descLane, descLaneConns, descLaneBound,
+		descQueue, descQueueDepth, descGuard, descLane, descLaneBound, descLaneConns,
+		descBuild,
 	} {
 		ch <- d
 	}
@@ -78,7 +84,55 @@ func gauge(ch chan<- prometheus.Metric, d *prometheus.Desc, v float64, labels ..
 	ch <- prometheus.MustNewConstMetric(d, prometheus.GaugeValue, v, labels...)
 }
 
+// buildLabels reads what this BINARY actually links, which is not what any
+// go.mod says.
+//
+// This exists because of a real outage. On 2026-09-23 both bridges refused
+// 100% of delivered objects for about ninety minutes: the deployed binary
+// linked shard-common v0.21.0 while go.mod required v0.22.0, and v0.21.0 has
+// no SplitBEEFPayload, so the record the edge now delivers read as a malformed
+// object. Nothing on the host said which version was linked. The only way to
+// find it was `go version -m` on the binary, over ssh, once somebody already
+// suspected it.
+//
+// Publishing it makes version skew QUERYABLE: two hosts disagreeing, or a host
+// running something other than what was released, is a PromQL question rather
+// than an investigation. The deps are read from the build info the linker
+// embeds, so this cannot drift from what is actually running the way a
+// hand-set version string does.
+func buildLabels() (version, shardCommon, goSDK string) {
+	version, shardCommon, goSDK = "unknown", "unknown", "unknown"
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	if bi.Main.Version != "" {
+		version = bi.Main.Version
+	}
+	for _, d := range bi.Deps {
+		if d == nil {
+			continue
+		}
+		// A replaced module reports the REPLACEMENT's version; that is the one
+		// actually compiled in, so it is the one worth publishing.
+		v := d.Version
+		if d.Replace != nil && d.Replace.Version != "" {
+			v = d.Replace.Version
+		}
+		switch d.Path {
+		case "github.com/lightwebinc/shard-common":
+			shardCommon = v
+		case "github.com/bsv-blockchain/go-sdk":
+			goSDK = v
+		}
+	}
+	return
+}
+
 func (c *collector) Collect(ch chan<- prometheus.Metric) {
+	ver, sc, sdk := buildLabels()
+	gauge(ch, descBuild, 1, ver, sc, sdk, runtime.Version())
+
 	if c.feed != nil {
 		s := c.feed.Stats()
 		counter(ch, descFeed, s.Submitted, "submitted")
