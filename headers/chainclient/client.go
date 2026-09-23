@@ -83,6 +83,16 @@ func (c *Client) get(ctx context.Context, path string, out any) (int, error) {
 // A height the store does not hold answers 404, which is reported as "not
 // valid" with no error: it means the proof cannot be checked yet, not that
 // something is broken.
+//
+// ⚠ DO NOT DRIVE ENGINE REORG HANDLING AGAINST THIS TRACKER AS IT STANDS.
+// The overlay engine's isProvenAnchorStale treats isValidRootForHeight ==
+// false as STALE and evicts, and this method returns false for a 404 that
+// means "the store does not hold that height" — not "that root is wrong".
+// Wiring handleReorg or revalidateRecentAnchors to this today would therefore
+// destroy live state for every height the store has not yet received, which on
+// a host anchored below the chain tip is most of them. Fix the 404 semantics
+// first: the two cases need to be distinguishable to a caller that evicts on
+// the answer.
 func (c *Client) IsValidRootForHeight(ctx context.Context, root *chainhash.Hash, height uint32) (bool, error) {
 	if root == nil {
 		return false, nil
