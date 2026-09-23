@@ -134,6 +134,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	gauge(ch, descBuild, 1, ver, sc, sdk, runtime.Version())
 
 	if c.feed != nil {
+		f := c.feed
 		s := c.feed.Stats()
 		counter(ch, descFeed, s.Submitted, "submitted")
 		counter(ch, descFeed, s.EngineError, "engine_error")
@@ -142,6 +143,28 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descFeed, s.Rejected, "rejected")
 		counter(ch, descFeed, s.Sunk, "sunk")
 		counter(ch, descFeed, s.Shed, "shed")
+		// Preset every elected topic's outcomes at zero before emitting what
+		// actually happened.
+		//
+		// Without this the steak series exist only for outcomes that have
+		// OCCURRED, and that breaks the alert that matters most. A bridge
+		// restarted INTO a state where the engine admits nothing never creates
+		// an `admitted` series at all, so a rule of the form
+		// `empty > 0 and on(instance) admitted == 0` finds no right-hand
+		// vector and silently never fires — blind in exactly the scenario it
+		// exists for. The same trap the rules file warns about in prose, here
+		// in the emitter.
+		seen := make(map[feed.SteakKey]bool, len(s.Steak))
+		for k := range s.Steak {
+			seen[k] = true
+		}
+		for _, name := range f.Topics {
+			for _, oc := range []string{feed.OutcomeAdmitted, feed.OutcomeEmpty, feed.OutcomeError} {
+				if k := (feed.SteakKey{Topic: name, Outcome: oc}); !seen[k] {
+					counter(ch, descSteak, 0, name, oc)
+				}
+			}
+		}
 		for k, v := range s.Steak {
 			counter(ch, descSteak, v, k.Topic, k.Outcome)
 		}

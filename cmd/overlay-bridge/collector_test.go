@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/lightwebinc/overlay-bridge/feed"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+)
 
 // TestBuildInfoReportsWhatIsLinked is the outage guard. A deployed binary keeps
 // the dependency version it was BUILT with for ever, and go.mod says nothing
@@ -29,4 +35,49 @@ func TestBuildInfoReportsWhatIsLinked(t *testing.T) {
 		t.Error("go_sdk reads 'unknown': the go-sdk pin is a SECURITY pin and must be visible in metrics")
 	}
 	t.Logf("build_info: version=%s shard_common=%s go_sdk=%s", ver, shardCommon, goSDK)
+}
+
+// TestSteakOutcomesArePresetAtZero guards the trap that would have made the
+// most important alert on this bridge silently never fire.
+//
+// The steak counters are emitted by ranging over a map that starts EMPTY, so a
+// series exists only once its outcome has happened at least once. A bridge
+// restarted into a state where the engine admits nothing therefore never
+// creates outcome="admitted", and a rule shaped
+// `empty > 0 and on(instance) admitted == 0` finds no right-hand vector and
+// matches nothing. The alert reads healthy precisely when the host is not.
+func TestSteakOutcomesArePresetAtZero(t *testing.T) {
+	var id [32]byte
+	id[0] = 0x01
+	f := &feed.Feed{Topics: map[[32]byte]string{id: "tm_lab_a"}}
+	c := &collector{feed: f}
+
+	ch := make(chan prometheus.Metric, 64)
+	c.Collect(ch)
+	close(ch)
+
+	got := map[string]bool{}
+	for m := range ch {
+		var d dto.Metric
+		if err := m.Write(&d); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		var topic, outcome string
+		for _, l := range d.GetLabel() {
+			switch l.GetName() {
+			case "topic":
+				topic = l.GetValue()
+			case "outcome":
+				outcome = l.GetValue()
+			}
+		}
+		if topic != "" {
+			got[topic+"/"+outcome] = true
+		}
+	}
+	for _, oc := range []string{"admitted", "empty", "error"} {
+		if !got["tm_lab_a/"+oc] {
+			t.Errorf("tm_lab_a/%s is absent; an absent series makes the alert that reads it match nothing", oc)
+		}
+	}
 }
