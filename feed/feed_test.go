@@ -340,3 +340,54 @@ func TestHandleShedsWhenTheQueueIsFull(t *testing.T) {
 		t.Fatalf("stats = %+v, want a shed count", f.Stats())
 	}
 }
+
+// TestHandleRecordPayloadLandsOnEveryElectedName covers the record-carrying
+// delivery: the plane delivered once, under the first elected topic it
+// matched, with every name the publisher wrote in the payload. The feed
+// submits the object to each elected name in the record (the other elected
+// topic would otherwise never see it), marks the guard for each, and leaves
+// names it did not elect alone.
+func TestHandleRecordPayloadLandsOnEveryElectedName(t *testing.T) {
+	sub := &stubSubmitter{steak: admitted("tm_a")}
+	f := newFeed(t, sub, "tm_a", "tm_c")
+	payload, err := objfmt.EncodeBEEFRecord([]string{"tm_a", "tm_b", "tm_c", "tm_label"}, beefObj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Handle(context.Background(), objfmt.EncodeBEEFDelivery(objfmt.TopicID("tm_a"), payload)); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(sub.calls) != 2 || sub.calls[0] != "tm_a" || sub.calls[1] != "tm_c" {
+		t.Fatalf("submitted to %v, want [tm_a tm_c]", sub.calls)
+	}
+	for i, body := range sub.bodies {
+		if string(body) != string(beefObj) {
+			t.Fatalf("submit %d carried the record, not the object", i)
+		}
+	}
+	cid := objfmt.ContentID(beefObj)
+	for _, name := range []string{"tm_a", "tm_c"} {
+		if dir, ok := f.Guard.Lookup(cid, objfmt.TopicID(name)); !ok || dir != registry.Delivered {
+			t.Fatalf("guard not marked Delivered for %s", name)
+		}
+	}
+	if _, ok := f.Guard.Lookup(cid, objfmt.TopicID("tm_b")); ok {
+		t.Fatal("guard marked for a topic this bridge did not elect")
+	}
+
+	// A record with the matched name only, or a bare object, is one submit.
+	sub2 := &stubSubmitter{steak: admitted("tm_a")}
+	f2 := newFeed(t, sub2, "tm_a", "tm_c")
+	if err := f2.Handle(context.Background(), objfmt.EncodeBEEFDelivery(objfmt.TopicID("tm_a"), beefObj)); err != nil {
+		t.Fatalf("bare Handle: %v", err)
+	}
+	if len(sub2.calls) != 1 {
+		t.Fatalf("bare object submitted to %v, want [tm_a]", sub2.calls)
+	}
+
+	// A malformed record inside the delivery is a parse error, not a reject.
+	bad := append(append([]byte(nil), payload...), 0x00)
+	if err := f2.Handle(context.Background(), objfmt.EncodeBEEFDelivery(objfmt.TopicID("tm_a"), bad)); err == nil {
+		t.Fatal("trailing byte after the record accepted")
+	}
+}

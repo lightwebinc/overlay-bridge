@@ -275,8 +275,9 @@ submit costs N full verifications and turns a failure on the last topic into a
 502 after the earlier ones were admitted and published. Both engines accept a
 multi-topic submit, so one engine call with the reply split per topic would be
 cheaper. It is left as is for now because the two engines' multi-topic reply
-shapes have not been run, only read, and because multi-topic publication is
-not admitted by the fabric ingress today in any case.
+shapes have not been run, only read. The same per-topic shape applies on the
+feed side: a delivery whose payload names several topics this bridge elected
+is submitted to each of them.
 
 ## Open items
 

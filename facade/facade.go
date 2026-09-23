@@ -209,10 +209,12 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 		if f.cfg.Publish == nil {
 			continue
 		}
-		// One record per topic, never a multi-topic record: the open ingress
-		// admits a single topic per submission and silently books the rest as
-		// a multi-topic refusal, which an operator is pre-briefed to read as
-		// correct behaviour and would therefore never diagnose.
+		// One record per topic. A record naming every topic at once is
+		// admitted, but the plane delivers only its leading topics (one
+		// through the public door, the operator's cap through a tunnel) and
+		// carries the rest as labels; one record per topic keeps every topic
+		// the client named deliverable, and each record still names the
+		// topic it is for, so a subscriber sees what it was published under.
 		record, err := objfmt.EncodeBEEFRecord([]string{name}, object)
 		if err != nil {
 			f.bump(&f.publishFailed)

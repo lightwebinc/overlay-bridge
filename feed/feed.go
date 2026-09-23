@@ -93,7 +93,7 @@ func (f *Feed) queue() chan job {
 }
 
 type job struct {
-	name   string
+	names  []string
 	object []byte
 }
 
@@ -120,7 +120,7 @@ func (f *Feed) Start(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case j := <-q:
-					f.submitOne(ctx, j.name, j.object)
+					f.submitAll(ctx, j.names, j.object)
 				}
 			}
 		}()
@@ -155,7 +155,7 @@ func (f *Feed) maxObject() int {
 // policy: the sender's problem, counted separately, connection kept. Any other
 // error is ours or the engine's. Neither drops the connection.
 func (f *Feed) Handle(ctx context.Context, record []byte) error {
-	topicID, object, n, err := objfmt.DecodeBEEFDelivery(record)
+	topicID, payload, n, err := objfmt.DecodeBEEFDelivery(record)
 	if err != nil {
 		f.c.add(&f.c.parseError)
 		return fmt.Errorf("feed: decode delivery record: %w", err)
@@ -166,6 +166,13 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		// a bug rather than a malformed sender.
 		f.c.add(&f.c.parseError)
 		return fmt.Errorf("feed: record is %d bytes, codec consumed %d", len(record), n)
+	}
+	// The payload is the publisher's submission record verbatim (every name
+	// it wrote, then the object) or, from an older edge, the bare object.
+	object, named, err := objfmt.SplitBEEFPayload(payload)
+	if err != nil {
+		f.c.add(&f.c.parseError)
+		return fmt.Errorf("feed: decode delivery payload: %w", err)
 	}
 	if len(object) > f.maxObject() {
 		f.c.add(&f.c.rejected)
@@ -191,6 +198,21 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		return lanes.ErrReject
 	}
 
+	// The plane delivers an object ONCE per subscriber however many of its
+	// deliverable topics the subscriber elected, under the first that
+	// matched. The other names ride in the payload, so every elected topic
+	// the publisher named gets the object here, from this one delivery;
+	// names this bridge did not elect are labels and are left alone.
+	names := []string{name}
+	for _, other := range named {
+		if other == name {
+			continue
+		}
+		if elected, ok := f.Topics[objfmt.TopicID(other)]; ok && elected == other {
+			names = append(names, other)
+		}
+	}
+
 	// Copy before hashing. The codec returns the object as a slice into the
 	// record, and the lane reader aliases its own buffer until the next read,
 	// so the identity must be taken over bytes this handler owns.
@@ -199,12 +221,15 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 
 	contentID := objfmt.ContentID(owned)
 
-	// Mark BEFORE the submit. The plane has now delivered this object on this
-	// topic; a client that re-submits the same bytes must not push them back
-	// up the tunnel. Marking afterwards leaves a window in which the echo
-	// arrives before the mark lands.
+	// Mark BEFORE the submit, for every topic the object lands on here. The
+	// plane has now delivered this object; a client that re-submits the same
+	// bytes to any of them must not push them back up the tunnel. Marking
+	// afterwards leaves a window in which the echo arrives before the mark
+	// lands.
 	if f.Guard != nil {
-		f.Guard.Mark(contentID, topicID, registry.Delivered)
+		for _, n := range names {
+			f.Guard.Mark(contentID, objfmt.TopicID(n), registry.Delivered)
+		}
 	}
 
 	if f.Submit == nil {
@@ -223,7 +248,7 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		}
 		q := f.queue()
 		select {
-		case q <- job{name: name, object: owned}:
+		case q <- job{names: names, object: owned}:
 			return nil
 		default:
 			f.c.add(&f.c.shed)
@@ -231,7 +256,19 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 			return ErrShed
 		}
 	}
-	return f.submitOne(ctx, name, owned)
+	return f.submitAll(ctx, names, owned)
+}
+
+// submitAll submits one object to each of its topics here, booking each
+// answer; the first error is returned after every topic has been tried.
+func (f *Feed) submitAll(ctx context.Context, names []string, object []byte) error {
+	var first error
+	for _, name := range names {
+		if err := f.submitOne(ctx, name, object); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // submitOne submits one object and books the engine's answer.

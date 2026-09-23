@@ -5,11 +5,17 @@ Three independent parts on one landing machine, and no state of record.
 ## feed (down)
 
 The object lane delivers one length-delimited BRC-149 delivery record per
-object: the identifier of the topic that matched, the object's length, and the
-BEEF object verbatim. The feed splits the stream on the explicit length, maps
-the topic identifier back to the name the host elected (the identifier is the
-hash of the name, so the map is computed from the election and never fetched),
-and submits the object to the engine with that name.
+object: the identifier of the elected topic that matched, the payload's
+length, and the payload verbatim, which is the publisher's submission record
+(every topic name it wrote, then the BEEF object) or, from an older edge, the
+bare object. The feed splits the stream on the explicit length, unwraps the
+payload, maps the matched identifier back to the name the host elected (the
+identifier is the hash of the name, so the map is computed from the election
+and never fetched), and submits the object to the engine under that name and
+under every other name in the record the host also elected. The plane
+delivers an object once per subscriber however many of its topics matched,
+so that second step is what keeps every elected topic fed; names the host
+did not elect are labels and are left alone.
 
 The plane is open to any publisher, so the bytes on this lane are whatever some
 publisher chose to send and the network never parses past the leading marker.

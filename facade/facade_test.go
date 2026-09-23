@@ -98,8 +98,8 @@ func TestSubmitForwardsThenPublishes(t *testing.T) {
 	if len(pub.records) != 1 {
 		t.Fatalf("published %d records, want 1", len(pub.records))
 	}
-	// One record per topic, never a multi-topic record: the open ingress
-	// admits a single topic and books the rest as a refusal nobody diagnoses.
+	// One record per topic, so every topic the client named stays
+	// deliverable rather than a label past the plane's per-record cap.
 	topicsIn, _, err := decodeRecordTopics(pub.records[0])
 	if err != nil {
 		t.Fatalf("decode published record: %v", err)
@@ -331,7 +331,7 @@ func TestMultiTopicPublishesOneRecordEach(t *testing.T) {
 			t.Fatalf("record %d: %v", i, err)
 		}
 		if len(names) != 1 {
-			t.Fatalf("record %d names %v; a multi-topic record is refused at ingress", i, names)
+			t.Fatalf("record %d names %v; one record per topic keeps each deliverable", i, names)
 		}
 	}
 }

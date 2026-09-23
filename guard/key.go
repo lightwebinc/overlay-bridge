@@ -6,9 +6,12 @@ import (
 	"github.com/lightwebinc/teranode-bridge/registry"
 )
 
-// Key is SHA-256(ContentID ‖ TopicID), byte for byte the same key the fabric's
-// own BEEF ingress claims an object under. Matching it is deliberate, and two
-// properties follow.
+// Key is SHA-256(ContentID ‖ TopicID), the shape of the key the fabric's own
+// BEEF ingress claims an object under. ContentID here is over the OBJECT
+// bytes on both of the bridge's paths (the facade hashes what the client
+// sent, the feed hashes what the delivery carried), which is what makes the
+// two directions meet; the fabric hashes the whole submission record, so its
+// key differs in value but not in shape. Two properties follow.
 //
 // The TopicID stays in the key. Keying the pair, never the bare ContentID, is
 // what keeps a later re-submission of the same object to a NEW topic from
@@ -18,10 +21,9 @@ import (
 // which meant parsing BEEF to find it) with the delivered bytes' ContentID; it
 // did not change the pairing.
 //
-// The bridge and the plane agree on what "the same object" is. A publish this
-// guard lets through, and the ingress has already claimed, is dropped at
-// ingress under this identical key, so the two layers cannot disagree about
-// identity and quietly double-count.
+// The bridge's two directions agree on what "the same object" is: a delivery
+// marks the pair the facade would look up for the echoing client, and a
+// publish marks the pair the feed would look up for the returning delivery.
 func Key(contentID, topicID [32]byte) registry.Key {
 	h := sha256.New()
 	h.Write(contentID[:])
