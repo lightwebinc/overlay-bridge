@@ -116,6 +116,13 @@ type Observation struct {
 type entry struct {
 	root chainhash.Hash
 	prev chainhash.Hash
+	// viaAnchor marks a header this store did not receive on the lane: it was
+	// fetched from the anchor to re-anchor across a gap. It exists so RootAt
+	// books the answer against the source that actually produced it. Without
+	// it a re-anchored height reads as a lane answer, and the one metric that
+	// is supposed to show whether the lane feeds verification credits the lane
+	// for an answer a third party gave.
+	viaAnchor bool
 }
 
 // Store is the header chain. It is safe for concurrent use.
@@ -237,7 +244,7 @@ func (s *Store) Observe(ctx context.Context, hdr []byte) (Observation, error) {
 				parentH, known = existing, true
 			} else {
 				s.byHash[prev] = h
-				s.putLocked(h, prev, entry{root: r})
+				s.putLocked(h, prev, entry{root: r, viaAnchor: true})
 				parentH, known, obs.Reanchor = h, true, true
 			}
 			s.mu.Unlock()
@@ -355,7 +362,14 @@ func (s *Store) RootAt(ctx context.Context, height uint32) (*chainhash.Hash, err
 		e, ok = s.at[height][hash]
 	}
 	if ok {
-		s.fromLane++
+		// A re-anchored header sits in the canonical map like any other, but
+		// its root came from the anchor, not from the lane. Book it where it
+		// came from.
+		if e.viaAnchor {
+			s.fromFallback++
+		} else {
+			s.fromLane++
+		}
 		s.mu.Unlock()
 		r := e.root
 		return &r, nil

@@ -369,3 +369,47 @@ func TestRedeliveryIsIdempotent(t *testing.T) {
 		t.Fatal("a re-delivery was counted as a competing header")
 	}
 }
+
+// TestReanchoredRootBooksAgainstTheAnchor is the attribution defect, measured
+// live in the VM lab: a header re-anchored across a gap sits in the canonical
+// map like any other, so RootAt used to book its root as a LANE answer even
+// though the anchor produced it. overlay_bridge_tracker_roots_total exists to
+// say whether the lane feeds verification, and
+// OverlayBridgeHeadersFromFallback alerts on it, so crediting the lane for a
+// third party's answer makes the one crutch detector we have read clean while
+// the host is leaning on the anchor.
+//
+// The header DELIVERED on the lane still books as lane. Only its fetched
+// parent books as fallback.
+func TestReanchoredRootBooksAgainstTheAnchor(t *testing.T) {
+	lk := &stubLookup{height: 200, root: rootN(9)}
+	s := newStore(t, Options{MinBits: easyBits, Lookup: lk})
+
+	var unseen chainhash.Hash
+	unseen[0] = 0xEE
+	hdr := mineHeader(t, unseen, rootN(1), easyBits)
+
+	obs, err := s.Observe(context.Background(), hdr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !obs.Reanchor {
+		t.Fatalf("obs = %+v, want a re-anchor", obs)
+	}
+
+	// 200 is the parent the ANCHOR supplied.
+	if _, err := s.RootAt(context.Background(), 200); err != nil {
+		t.Fatalf("RootAt(200): %v", err)
+	}
+	if st := s.Stats(); st.FromFallback != 1 || st.FromLane != 0 {
+		t.Fatalf("after reading the re-anchored parent: stats = %+v, want FromFallback 1 and FromLane 0", st)
+	}
+
+	// 201 is the header the LANE delivered.
+	if _, err := s.RootAt(context.Background(), 201); err != nil {
+		t.Fatalf("RootAt(201): %v", err)
+	}
+	if st := s.Stats(); st.FromFallback != 1 || st.FromLane != 1 {
+		t.Fatalf("after reading the lane's own header: stats = %+v, want FromFallback 1 and FromLane 1", st)
+	}
+}
