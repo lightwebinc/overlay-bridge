@@ -160,6 +160,30 @@ valid" while turning any OTHER non-ok status into a thrown error. Collapsing
 the two makes a broken header service look like a failed proof, which is the
 one reading an engine must never make.
 
+`GET /v1/header/{hash}`, hash held:
+
+```json
+{"hash": "<64 hex>", "height": 101, "known": true, "merkleRoot": "<64 hex>"}
+```
+
+`GET /v1/header/{hash}`, hash not held, **404**:
+
+```json
+{"hash": "<64 hex>"}
+```
+
+This is the route an ANCHOR must serve, and the bridge serves it so that one
+bridge can anchor another. A bridge calls it on its own anchor when a header
+arrives whose parent it never saw, which happens on every restart and on any
+host whose anchor sits below the chain tip. An anchor that does not serve it
+does not fail loudly: the lane connects, headers arrive, every one is counted
+`orphaned`, and the tip never moves.
+
+`known` distinguishes a first-hand answer from a relayed one: true means this
+host received the header on its lane, false means it holds it only because it
+re-anchored through its own anchor. A malformed hash is **400**, which is a
+different thing from "I do not hold it" and must not be collapsed into it.
+
 ### Chaintracks-compatible shape
 
 `GET /chaintracks/v2/height` and `GET /chaintracks/v2/header/height/{height}`,

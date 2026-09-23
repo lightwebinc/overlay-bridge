@@ -413,6 +413,13 @@ func (s *Store) HeaderForHeight(ctx context.Context, height uint32) (hash, root 
 		e, ok = s.at[height][h]
 	}
 	if ok {
+		// Same rule as RootAt: a re-anchored header is held here but came
+		// from the anchor, so it is booked there and reported NOT known.
+		if e.viaAnchor {
+			s.fromFallback++
+			s.mu.Unlock()
+			return h, e.root, false, nil
+		}
 		s.fromLane++
 		s.mu.Unlock()
 		return h, e.root, true, nil
@@ -439,8 +446,44 @@ func (s *Store) HeaderForHeight(ctx context.Context, height uint32) (hash, root 
 func (s *Store) Known(height uint32) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.canon[height]
-	return ok
+	hash, ok := s.canon[height]
+	if !ok {
+		return false
+	}
+	// Canonical is not the same as received. A height re-anchored from the
+	// anchor is canonical here and is built on, but the bridge did not
+	// receive it, and this flag is read as exactly that claim.
+	e, ok := s.at[height][hash]
+	return ok && !e.viaAnchor
+}
+
+// HeaderByHash resolves a header this store holds to its height and root.
+//
+// It answers ONLY from what this store holds and never consults the anchor: a
+// bridge asked to resolve a parent it does not have must say so, because the
+// caller's next move is to keep the header orphaned and wait, and an answer
+// relayed from a third party would re-anchor that caller onto a chain neither
+// host received. This is the route a bridge's own anchor must serve, and
+// serving it here is what lets one bridge anchor another instead of needing a
+// separate header service.
+//
+// received reports whether this header came off the lane rather than being
+// re-anchored from the anchor, so a caller can tell a first-hand answer from a
+// relayed one.
+func (s *Store) HeaderByHash(hash chainhash.Hash) (height uint32, root chainhash.Hash, received, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, know := s.byHash[hash]
+	if !know {
+		return 0, chainhash.Hash{}, false, false
+	}
+	e, held := s.at[h][hash]
+	if !held {
+		// byHash and at disagree, which means the height was pruned out from
+		// under the index. Report absent rather than a zero root.
+		return 0, chainhash.Hash{}, false, false
+	}
+	return h, e.root, !e.viaAnchor, true
 }
 
 // checkWork enforces the floor and then the header's own target.

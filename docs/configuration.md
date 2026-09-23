@@ -57,6 +57,21 @@ is the trivial floor, which is right for a lab and wrong for anything else.
 deliberately not defaulted: a default would quietly send a host's verification
 questions to a third party.
 
+**The anchor must serve all three native routes**: `/v1/tip`, `/v1/root/{height}`
+and `/v1/header/{hash}`. The third is the one that gets forgotten, and
+forgetting it is silent. Without it, a header whose parent this host never saw
+cannot be resolved, so it is counted `orphaned` and dropped; that is the state
+of every host that has just restarted, and of any host whose anchor sits below
+the chain tip. The lane reports a healthy connection and rising bytes the whole
+time, while `overlay_bridge_header_tip_height` never moves. Another
+`overlay-bridge` serves all three, so a second host can anchor on the first.
+
+Re-anchoring is BOUNDED: it resolves one parent per gap, not one per header.
+A root that came from the anchor this way is booked as `fallback` and reported
+`known: false`, so it does not flatter
+`overlay_bridge_tracker_roots_total{source="lane"}` — the metric that says
+whether the lane, rather than a third party, is feeding verification.
+
 ## Publishing
 
 | Flag | Default | Notes |

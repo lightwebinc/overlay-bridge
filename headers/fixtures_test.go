@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +45,8 @@ func TestHeaderAPIFixtures(t *testing.T) {
 		{"v1_tip", "/v1/tip", http.StatusOK},
 		{"v1_root_known", "/v1/root/" + at, http.StatusOK},
 		{"v1_root_unknown", "/v1/root/999999", http.StatusNotFound},
+		{"v1_header_known", "/v1/header/" + obs.Hash.String(), http.StatusOK},
+		{"v1_header_unknown", "/v1/header/" + strings.Repeat("0", 63) + "1", http.StatusNotFound},
 		{"chaintracks_height", "/chaintracks/v2/height", http.StatusOK},
 		{"chaintracks_header_known", "/chaintracks/v2/header/height/" + at, http.StatusOK},
 	} {

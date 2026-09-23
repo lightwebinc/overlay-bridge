@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"time"
 )
 
@@ -82,6 +84,33 @@ func (a *API) Handler() http.Handler {
 			"height":     h,
 			"merkleRoot": root.String(),
 			"known":      a.Store.Known(h),
+		})
+	})
+
+	// The route a bridge's ANCHOR has to serve, served here so one bridge can
+	// anchor another. Without it a host that restarts, or whose anchor sits
+	// below the chain tip, orphans every header the lane delivers: the parent
+	// is unknown, there is nothing to resolve it against, and the lane looks
+	// connected and healthy while chaining nothing. That is the failure this
+	// route exists to prevent, and it is silent without it.
+	mux.HandleFunc("GET /v1/header/{hash}", func(w http.ResponseWriter, r *http.Request) {
+		hash, err := chainhash.NewHashFromHex(r.PathValue("hash"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "hash"})
+			return
+		}
+		height, root, received, ok := a.Store.HeaderByHash(*hash)
+		if !ok {
+			// 404 is "I cannot resolve that parent", which the caller turns
+			// into "keep waiting", exactly as for an unknown height.
+			writeJSON(w, http.StatusNotFound, map[string]any{"hash": hash.String()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"hash":       hash.String(),
+			"height":     height,
+			"merkleRoot": root.String(),
+			"known":      received,
 		})
 	})
 

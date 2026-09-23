@@ -9,12 +9,20 @@ the host itself received.
 
 | Shape | Routes | Consumer |
 | --- | --- | --- |
-| native | `GET /v1/tip`, `GET /v1/root/{height}` | this repository's Go client in `headers/chainclient`, and the bridge's own tooling |
+| native | `GET /v1/tip`, `GET /v1/root/{height}`, `GET /v1/header/{hash}` | this repository's Go client in `headers/chainclient`, the bridge's own tooling, and any bridge anchoring off this one |
 | chaintracks | `GET /chaintracks/v2/height`, `GET /chaintracks/v2/header/height/{height}` | a stock TypeScript host, which is pointed at a header service with one configuration call |
 
 The native shape ships first and is what the bridge's own tests use. The
 chaintracks shape is what makes "point the engine at the bridge" a single
 configuration line rather than a patch.
+
+`GET /v1/header/{hash}` is the odd one out: it is not there for an engine, it
+is there for the bridge's own `-header-anchor`. A header whose parent this host
+never saw cannot be given a height, so it is orphaned and dropped. Resolving
+that parent by hash is what lets a restarted host, or one anchored below the
+tip, chain the lane's tail instead of discarding it. Serving the route as well
+as calling it is what removes the need for a separate header service in front
+of a second host.
 
 Three details of the chaintracks shape are load-bearing:
 
