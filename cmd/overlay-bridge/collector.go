@@ -143,6 +143,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descFeed, s.Rejected, "rejected")
 		counter(ch, descFeed, s.Sunk, "sunk")
 		counter(ch, descFeed, s.Shed, "shed")
+		counter(ch, descFeed, s.Retried, "retried")
 		// Preset every elected topic's outcomes at zero before emitting what
 		// actually happened.
 		//

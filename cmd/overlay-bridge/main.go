@@ -43,6 +43,7 @@ type config struct {
 	engineTimeout time.Duration
 	engineWorkers int
 	engineQueue   int
+	submitRetries int
 	maxObject     int
 
 	facadeListen  string
@@ -79,6 +80,7 @@ func main() {
 	flag.DurationVar(&c.engineTimeout, "engine-timeout", 30*time.Second, "per-submit ceiling")
 	flag.IntVar(&c.engineWorkers, "engine-workers", 4, "concurrent engine submits; the lane never waits on the engine")
 	flag.IntVar(&c.engineQueue, "engine-queue", 256, "deliveries queued behind the workers; a full queue sheds")
+	flag.IntVar(&c.submitRetries, "engine-retries", 4, "retries for a failed engine submit before the object is DROPPED; -1 disables")
 	flag.IntVar(&c.maxObject, "max-object", 0, "object-byte ceiling; 0 = codec default (64 MiB)")
 	flag.StringVar(&c.facadeListen, "facade-listen", "[::]:9175", "the client-facing BRC-22 /submit listener; empty = off")
 	flag.StringVar(&c.headersListen, "headers-listen", "[::]:9178", "chain-tracker read API; empty = off")
@@ -136,13 +138,14 @@ func run(c config, log *slog.Logger) error {
 		submitter = &feed.Client{Base: c.engine, Timeout: c.engineTimeout, Log: log}
 	}
 	f := &feed.Feed{
-		Topics:     feed.NewTopicMap(names),
-		Submit:     submitter,
-		Guard:      g,
-		MaxObject:  c.maxObject,
-		Workers:    c.engineWorkers,
-		QueueDepth: c.engineQueue,
-		Log:        log,
+		Topics:        feed.NewTopicMap(names),
+		Submit:        submitter,
+		Guard:         g,
+		MaxObject:     c.maxObject,
+		Workers:       c.engineWorkers,
+		QueueDepth:    c.engineQueue,
+		SubmitRetries: c.submitRetries,
+		Log:           log,
 	}
 
 	// ---- up-tunnel and the facade.

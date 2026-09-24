@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bsv-blockchain/go-sdk/overlay"
 	"github.com/lightwebinc/overlay-bridge/guard"
@@ -62,6 +63,27 @@ type Feed struct {
 	// pool replays its last object, and an engine outage becomes a connection
 	// storm. With workers, Handle returns as soon as the object is queued.
 	Workers int
+	// SubmitRetries is how many times a failed engine submit is retried
+	// before the object is given up on. Zero takes a small default; a
+	// negative value disables retry entirely.
+	//
+	// It exists because dropping on the first error LOSES DATA, measured: 55
+	// and 56 objects on the two lab hosts in one afternoon, every one of them
+	// during a window when the engine was restarting for a deploy. The object
+	// has already crossed the fabric, been reassembled and been written to
+	// this process; the engine being briefly unreachable is the most ordinary
+	// failure there is, and it is recoverable by waiting.
+	//
+	// Retrying here is safe BECAUSE this runs on a worker, off the lane read
+	// loop. The constraint that must not be broken is the one in main.go: an
+	// engine stall may never hold the delivery socket past the edge's write
+	// deadline. A worker blocking costs throughput and, if the queue fills,
+	// sheds — which is counted and visible. It never applies backpressure to
+	// the socket.
+	SubmitRetries int
+	// SubmitBackoff is the base delay between submit attempts; each attempt
+	// waits one more multiple of it. Zero takes a default.
+	SubmitBackoff time.Duration
 	// QueueDepth bounds the queued objects behind the workers. Zero takes a
 	// small default. When it is full a delivery is SHED: counted, logged, and
 	// refused back to the lane, which counts it too and keeps the connection.
@@ -271,19 +293,73 @@ func (f *Feed) submitAll(ctx context.Context, names []string, object []byte) err
 	return first
 }
 
-// submitOne submits one object and books the engine's answer.
-func (f *Feed) submitOne(ctx context.Context, name string, object []byte) error {
-	steak, err := f.Submit.Submit(ctx, name, object)
-	if err != nil {
-		f.c.add(&f.c.engineError)
-		if f.Log != nil {
-			f.Log.Warn("feed: engine submit failed", "topic", name, "err", err)
-		}
-		return fmt.Errorf("feed: submit %s to engine: %w", name, err)
+// defaultSubmitRetries and defaultSubmitBackoff give up after roughly half a
+// minute, which covers an ordinary service restart of the engine and stops
+// well short of holding a worker through a real outage.
+const (
+	defaultSubmitRetries = 4
+	defaultSubmitBackoff = 2 * time.Second
+)
+
+func (f *Feed) submitRetries() int {
+	switch {
+	case f.SubmitRetries < 0:
+		return 0
+	case f.SubmitRetries == 0:
+		return defaultSubmitRetries
+	default:
+		return f.SubmitRetries
 	}
-	f.c.add(&f.c.submitted)
-	f.c.addSteak(name, outcomeOf(steak, name))
-	return nil
+}
+
+func (f *Feed) submitBackoff() time.Duration {
+	if f.SubmitBackoff <= 0 {
+		return defaultSubmitBackoff
+	}
+	return f.SubmitBackoff
+}
+
+// submitOne submits one object and books the engine's answer, retrying a
+// bounded number of times before giving up.
+//
+// Only a TRANSPORT-shaped failure is retried, which is what "the engine is
+// unreachable" looks like. An engine that answered is not retried even when
+// the answer is useless: re-submitting an object the engine has already
+// rejected on its merits would loop until the budget ran out and then book the
+// same failure, having doubled the load for nothing.
+func (f *Feed) submitOne(ctx context.Context, name string, object []byte) error {
+	retries := f.submitRetries()
+	backoff := f.submitBackoff()
+	var err error
+	for attempt := 0; ; attempt++ {
+		var steak overlay.Steak
+		steak, err = f.Submit.Submit(ctx, name, object)
+		if err == nil {
+			f.c.add(&f.c.submitted)
+			f.c.addSteak(name, outcomeOf(steak, name))
+			if attempt > 0 {
+				f.c.add(&f.c.retried)
+				if f.Log != nil {
+					f.Log.Info("feed: engine submit recovered", "topic", name, "attempts", attempt+1)
+				}
+			}
+			return nil
+		}
+		if attempt >= retries || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * backoff):
+		}
+	}
+	f.c.add(&f.c.engineError)
+	if f.Log != nil {
+		f.Log.Warn("feed: engine submit failed, object DROPPED",
+			"topic", name, "attempts", retries+1, "err", err)
+	}
+	return fmt.Errorf("feed: submit %s to engine after %d attempts: %w", name, retries+1, err)
 }
 
 // outcomeOf classifies the engine's answer for the topic we submitted.

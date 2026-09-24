@@ -30,8 +30,13 @@ const (
 // state from these numbers; the oracle for what a host holds is its own lookup
 // service.
 type Stats struct {
-	Submitted    uint64
-	EngineError  uint64
+	Submitted   uint64
+	EngineError uint64
+	// Retried counts objects that FAILED an engine submit at least once and
+	// then succeeded. It is the difference between a transient engine restart
+	// and data loss, and without it a recovered submit is indistinguishable
+	// from one that never had trouble.
+	Retried      uint64
 	ParseError   uint64
 	UnknownTopic uint64
 	Rejected     uint64
@@ -46,9 +51,9 @@ type Stats struct {
 }
 
 type counters struct {
-	mu                                                                     sync.Mutex
-	submitted, engineError, parseError, unknownTopic, rejected, sunk, shed uint64
-	steak                                                                  map[SteakKey]uint64
+	mu                                                                              sync.Mutex
+	submitted, engineError, parseError, unknownTopic, rejected, sunk, shed, retried uint64
+	steak                                                                           map[SteakKey]uint64
 }
 
 func (c *counters) add(field *uint64) {
@@ -72,6 +77,7 @@ func (c *counters) snapshot() Stats {
 	s := Stats{
 		Submitted:    c.submitted,
 		EngineError:  c.engineError,
+		Retried:      c.retried,
 		ParseError:   c.parseError,
 		UnknownTopic: c.unknownTopic,
 		Rejected:     c.rejected,
