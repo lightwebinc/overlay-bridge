@@ -37,6 +37,13 @@ engine's published HTTP interfaces. Stop it, give the engine back its
 propagation peers and its stock chain tracker, and you have a stock overlay
 host again. The bridge holds no state of record.
 
+That claim is about THIS repository and is meant literally rather than as a
+claim about whichever engine you point it at: the bridge works against a stock
+engine and asks nothing of it beyond the published interfaces. Our own
+reference host happens to run a small fork of the TypeScript engine, for one
+observability hook unrelated to the bridge, and the bridge neither knows nor
+cares.
+
 ## Planes
 
 | Plane | Direction | What the bridge does |
@@ -52,7 +59,10 @@ loop and no rate limit to be subject to.
 
 ## Status
 
-Early. The packages land in the order the build plan sets out; see `docs/`.
+Running on devnet. All packages are built; the bridge lands objects into a
+released engine, serves headers from its own BRC-135 lane, and both reference
+hosts admit object-for-object. See `docs/` for the build plan and the wire
+contracts, and the repository tags for releases.
 
 ## Licence
 

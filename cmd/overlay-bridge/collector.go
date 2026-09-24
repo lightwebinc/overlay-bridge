@@ -101,13 +101,29 @@ func gauge(ch chan<- prometheus.Metric, d *prometheus.Desc, v float64, labels ..
 // embeds, so this cannot drift from what is actually running the way a
 // hand-set version string does.
 func buildLabels() (version, shardCommon, goSDK string) {
+	// Prefer the linker-stamped Version over the module's own.
+	//
+	// debug.ReadBuildInfo reports Main.Version as "(devel)" for anything not
+	// built as a tagged module download, which is every binary we actually
+	// deploy. A build_info series whose version label reads "(devel)" on every
+	// host cannot answer the question it exists for — "is this host running
+	// the release I think it is" — so the Makefile's -X main.Version stamp
+	// wins whenever it has been set.
 	version, shardCommon, goSDK = "unknown", "unknown", "unknown"
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
+		if Version != "" {
+			version = Version
+		}
 		return
 	}
-	if bi.Main.Version != "" {
+	switch {
+	case Version != "" && Version != "dev":
+		version = Version
+	case bi.Main.Version != "" && bi.Main.Version != "(devel)":
 		version = bi.Main.Version
+	case Version != "":
+		version = Version
 	}
 	for _, d := range bi.Deps {
 		if d == nil {

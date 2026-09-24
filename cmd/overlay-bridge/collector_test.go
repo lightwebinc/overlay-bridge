@@ -26,8 +26,13 @@ func TestBuildInfoReportsWhatIsLinked(t *testing.T) {
 			t.Errorf("%s label is empty; a missing label drops the series' identity", name)
 		}
 	}
-	// Under `go test` the main module reports a synthetic version, so only the
-	// DEPS are assertable here — and they are the ones that mattered.
+	// Under `go test` there is no linker stamp and the module reports a
+	// synthetic version, so `version` falls back to the "dev" default. What
+	// must never appear is "(devel)": a host reporting that cannot answer
+	// which release it is running, which is the whole point of the series.
+	if ver == "(devel)" {
+		t.Error(`version reads "(devel)": the linker stamp is not being preferred`)
+	}
 	if shardCommon == "unknown" {
 		t.Error("shard_common reads 'unknown': the dep scan did not find the module that caused the outage")
 	}

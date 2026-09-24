@@ -415,7 +415,7 @@ func TestReanchoredRootBooksAgainstTheAnchor(t *testing.T) {
 }
 
 // TestLateLaneDeliveryClearsAnchorProvenance is a defect found by auditing a
-// LIVE run, not by reading the code: overlay-us-1 held two heights (471, 474)
+// LIVE run, not by reading the code: a bridge held two heights (471, 474)
 // permanently reporting known:false although the lane had delivered them.
 //
 // Re-anchoring fetches a missing parent from the anchor and marks it
