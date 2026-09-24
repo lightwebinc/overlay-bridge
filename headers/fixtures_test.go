@@ -22,7 +22,7 @@ var regen = flag.Bool("regen", false, "rewrite the header API golden bodies")
 // its status codes.
 //
 // These bytes are a contract with other repositories, not an internal detail.
-// bfinger and any other consumer implement a chain tracker against this API
+// A consumer that verifies SPV against this bridge implements a chain tracker
 // without importing this module, so the shape has to be generated once here
 // and vendored there rather than re-derived per repo from a prose description.
 // A field renamed or a root rendered in the wrong byte order fails every
