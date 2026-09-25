@@ -44,11 +44,10 @@ public packages, never forked.
 An overlay host does two jobs when an object arrives. It **admits** it: verify
 the BEEF, run the topic manager, index the outputs. Then it **propagates** it:
 one HTTPS submit to every other host of the topic. The second job is the
-expensive one, and only an operator sees it. A publisher already submits to
-every host it can find, and every host that admits re-submits to every other,
-so between N hosts one object crosses the network on the order of N squared
-times and is fully verified at every arrival before a duplicate check discards
-it. A host that was unreachable simply misses it, with no signal that it did.
+expensive one. Every host that admits re-submits to every other, so between N
+hosts one object crosses the network on the order of N squared times, fully
+verified at every arrival before a duplicate check discards it, and a host
+that was unreachable simply misses it.
 
 This bridge replaces that second fan-out with one publication. Delivery arrives
 as an ordinary submit on the interface the engine already serves; publication
@@ -60,13 +59,6 @@ its own proof and verified against headers that host received itself.
 engine's published HTTP interfaces, in TypeScript or Go. Stop it, give the
 engine back its propagation peers and its stock chain tracker, and you have a
 stock overlay host again. The bridge holds no state of record.
-
-That claim is about THIS repository and is meant literally rather than as a
-claim about whichever engine you point it at: the bridge works against a stock
-engine and asks nothing of it beyond the published interfaces. Our own
-reference host happens to run a small fork of the TypeScript engine, for one
-observability hook unrelated to the bridge, and the bridge neither knows nor
-cares.
 
 ## Planes
 
@@ -196,10 +188,9 @@ listener is bound.
 - [`github.com/bsv-blockchain/go-sdk`](https://github.com/bsv-blockchain/go-sdk): BEEF parsing and block-header hashing
 - [`github.com/prometheus/client_golang`](https://github.com/prometheus/client_golang): metrics
 
-The bridge deliberately links no overlay engine module. The two contracts it
-needs, the submit request and its admittance response in both engines' wire
-forms, are pinned by contract-fixture tests, so a small bridge does not pull in
-an engine's dependency tree.
+The bridge links no overlay engine module. The two contracts it needs, the
+submit request and its admittance response in both engines' wire forms, are
+pinned by fixtures captured from the real engines.
 
 ## Status
 

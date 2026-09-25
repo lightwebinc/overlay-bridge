@@ -16,10 +16,8 @@ bridge, and this one takes the 917x block.
 | 9178 | header read API |
 | 9179 | metrics and health |
 
-9176 and 9177 are deliberately unused. The original block reserved them for a
-second facade listener and for a resolver, and the rulings that gave the bridge
-one listener and removed engine-side propagation emptied both, so they have no
-binder and stay free.
+9176 and 9177 are unused: the bridge has one facade listener and no resolver,
+so nothing binds them.
 
 ## Two bridges on one machine
 

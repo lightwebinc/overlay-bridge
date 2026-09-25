@@ -96,13 +96,12 @@ func (c *Client) httpClient() *http.Client {
 //     parses the body with a raw parser bound to exactly that type, so any
 //     other value leaves the body empty and the submit fails with a missing
 //     BEEF body; the Go engine's size limiter likewise only engages on it.
-//   - x-topics carries ONE topic name, with no spaces. The Go engine's binder
-//     splits the header on commas without trimming and reads only the first
-//     element, so a single leading space fails the whole submit as an unknown
-//     topic. A delivery record carries exactly one topic identifier, so there
-//     is never cause to send more.
-//   - x-topics must be sent ONCE. The TypeScript host requires the header to
-//     be a string; a repeated header arrives as an array and is refused.
+//   - x-topics carries ONE topic name, with no spaces, sent ONCE. The Go
+//     server reads a JSON array as a single topic name and answers 500, and
+//     the TypeScript host refuses a repeated header; one plain name in one
+//     header is the form neither engine can misread. A delivery record
+//     carries exactly one topic identifier, so there is never cause to send
+//     more.
 func (c *Client) Submit(ctx context.Context, topic string, object []byte) (overlay.Steak, error) {
 	a, err := c.SubmitDetail(ctx, topic, object)
 	return a.Steak, err
@@ -114,8 +113,8 @@ func (c *Client) SubmitDetail(ctx context.Context, topic string, object []byte) 
 		return Answer{}, fmt.Errorf("feed: no engine base configured")
 	}
 	if strings.ContainsAny(topic, " ,") {
-		// Refuse locally rather than let the engine misread it: a space or a
-		// comma here is silently destructive on at least one of the two hosts.
+		// Refuse locally: a name two engines could split or trim differently
+		// is a name to refuse before it is sent.
 		return Answer{}, fmt.Errorf("feed: topic %q contains a space or comma", topic)
 	}
 	url := strings.TrimRight(c.Base, "/") + "/submit"
