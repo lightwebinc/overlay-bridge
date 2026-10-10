@@ -154,7 +154,7 @@ machine's own addresses. The sections above give the reasons behind each check.
 | `9179` | in | `/metrics`, `/healthz`, `/readyz` |
 | `8725` | out | one publication per accepted submission, to the fabric's BEEF ingress |
 
-The object and header lanes do not collide with the settlement lanes the
-sibling bridges take, so a site that runs an overlay host beside another
-bridge provisions one delivery slot and elects every lane it needs on it; see
-[deliver-once.md](deliver-once.md).
+Lane ports follow the fabric-wide
+[lane numbering](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/lane-numbering.md);
+one delivery slot serves every bridge at a site
+([deliver once](deliver-once.md)).
