@@ -111,3 +111,50 @@ plane. `/readyz` reports ready once every lane's listener is bound.
 Both are bounds. Non-positive values take the defaults rather than disabling
 the guard, because a guard that admits everything turns every re-submission
 into a second publication.
+
+## Examples
+
+```bash
+# Sink: terminate the lanes, count, discard. Burn in a delivery slot before
+# an engine exists.
+./overlay-bridge -mode sink
+
+# Feed: deliver into a released engine, with headers served from the lane.
+./overlay-bridge -mode feed \
+  -engine          'http://127.0.0.1:8080' \
+  -topics          'tm_example' \
+  -header-anchor   'http://192.0.2.10:9178' \
+  -header-min-bits 0x1d00ffff
+
+# All: also serve the submit facade and publish once onto the plane.
+./overlay-bridge -mode all \
+  -engine          'http://127.0.0.1:8080' \
+  -topics          'tm_example,tm_other' \
+  -header-anchor   'http://192.0.2.10:9178' \
+  -header-min-bits 0x1d00ffff \
+  -edge-ingress    '2001:db8:59::a,2001:db8:59::b' \
+  -publish-source  '2001:db8:59::10'
+```
+
+`-header-min-bits` is the compact-target floor of the network the host is on
+(`0x1d00ffff` on mainnet); the default is the trivial floor, right for a lab
+and wrong for anything else. `-edge-ingress` lists the slot's inner addresses
+in failover order, and `-publish-source` is checked at startup against the
+machine's own addresses. The sections above give the reasons behind each check.
+
+
+## Default ports
+
+| Port | Direction | Carries |
+| --- | --- | --- |
+| `9171` | in | object lane (BRC-149 delivery records); the edge dials the bridge |
+| `9172` | in | header lane (bare BRC-135 headers) |
+| `9175` | in | submit facade (`POST /submit`, the engine's own interface) |
+| `9178` | in | chain-tracker read API (`/v1/tip`, `/v1/root/{height}`, `/v1/header/{hash}`) |
+| `9179` | in | `/metrics`, `/healthz`, `/readyz` |
+| `8725` | out | one publication per accepted submission, to the fabric's BEEF ingress |
+
+The object and header lanes do not collide with the settlement lanes the
+sibling bridges take, so a site that runs an overlay host beside another
+bridge provisions one delivery slot and elects every lane it needs on it; see
+[deliver-once.md](deliver-once.md).
