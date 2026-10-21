@@ -21,6 +21,7 @@ import (
 	"github.com/lightwebinc/overlay-bridge/feed"
 	"github.com/lightwebinc/overlay-bridge/guard"
 	"github.com/lightwebinc/overlay-bridge/headers"
+	"github.com/lightwebinc/overlay-bridge/pkg/spv"
 	"github.com/lightwebinc/overlay-bridge/uptunnel"
 	"github.com/lightwebinc/shard-common/objfmt"
 	"github.com/lightwebinc/teranode-bridge/lanes"
@@ -65,6 +66,11 @@ type config struct {
 
 	metricsAddr string
 	statsEvery  time.Duration
+
+	verifyMode      string
+	verifyNetwork   string
+	verifyMarkerKey string
+	verifyTimeout   time.Duration
 }
 
 func main() {
@@ -97,6 +103,10 @@ func main() {
 	flag.IntVar(&c.guardEntries, "guard-entries", 1<<20, "loop-guard ceiling")
 	flag.StringVar(&c.metricsAddr, "metrics-addr", "[::]:9179", "/metrics, /healthz, /readyz; empty = off")
 	flag.DurationVar(&c.statsEvery, "stats-every", time.Minute, "stats line interval; 0 = off")
+	flag.StringVar(&c.verifyMode, "verify", "off", "bridge-side SPV of delivered objects: off | shadow (verify and compare, submit as before) | enforce (drop refused objects, mark passing ones)")
+	flag.StringVar(&c.verifyNetwork, "verify-network", "main", "activation heights scripts are judged under: main | test | all (every rule from block 0; regtest-style chains)")
+	flag.StringVar(&c.verifyMarkerKey, "verify-marker-key", "", "file holding the key the enforce-mode trust marker is computed under; mode 0600; required for enforce")
+	flag.DurationVar(&c.verifyTimeout, "verify-timeout", 5*time.Second, "ceiling on one verification; past it the object goes to the engine unmarked")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 
@@ -137,6 +147,8 @@ func run(c config, log *slog.Logger) error {
 	if c.mode != "sink" {
 		submitter = &feed.Client{Base: c.engine, Timeout: c.engineTimeout, Log: log}
 	}
+	vmode, _ := feed.ParseVerifyMode(c.verifyMode) // validated above
+	tim := newTimings()
 	f := &feed.Feed{
 		Topics:        feed.NewTopicMap(names),
 		Submit:        submitter,
@@ -146,6 +158,21 @@ func run(c config, log *slog.Logger) error {
 		QueueDepth:    c.engineQueue,
 		SubmitRetries: c.submitRetries,
 		Log:           log,
+		VerifyMode:    vmode,
+		OnVerified:    tim.onVerified,
+		OnSubmitted:   tim.onSubmitted,
+	}
+	if vmode != feed.VerifyOff {
+		network, _ := spv.ParseNetwork(c.verifyNetwork) // validated above
+		f.Verify = &spv.Verifier{Tracker: tracker, Network: network, Timeout: c.verifyTimeout}
+		if c.verifyMarkerKey != "" {
+			key, err := spv.LoadKey(c.verifyMarkerKey)
+			if err != nil {
+				return err
+			}
+			f.MarkerKey = key
+		}
+		log.Info("bridge SPV verification", "mode", vmode, "network", network, "marker", len(f.MarkerKey) > 0)
 	}
 
 	// ---- up-tunnel and the facade.
@@ -231,7 +258,9 @@ func run(c config, log *slog.Logger) error {
 		col := &collector{
 			feed: f, guard: g, store: store, tracker: tracker,
 			facade: fac, queue: queue,
-			lanes: []*lanes.Lane{beefLane, headerLane},
+			lanes:   []*lanes.Lane{beefLane, headerLane},
+			timings: tim,
+			verify:  vmode != feed.VerifyOff,
 		}
 		tasks.go_("metrics", func(ctx context.Context) error {
 			return serveMetrics(ctx, c.metricsAddr, col, log)
@@ -304,6 +333,15 @@ func (c config) validate() error {
 		if strings.TrimSpace(c.topics) == "" {
 			return errors.New("-topics is required unless -mode sink: the bridge holds the only topic name map")
 		}
+	}
+	if _, err := feed.ParseVerifyMode(c.verifyMode); err != nil {
+		return fmt.Errorf("-verify: %w", err)
+	}
+	if _, err := spv.ParseNetwork(c.verifyNetwork); err != nil {
+		return fmt.Errorf("-verify-network: %w", err)
+	}
+	if c.verifyMode == string(feed.VerifyEnforce) && c.verifyMarkerKey == "" {
+		return errors.New("-verify enforce needs -verify-marker-key: without the marker the engine verifies every object again and enforce only adds a second verification")
 	}
 	if c.mode == "all" && c.facadeListen != "" && c.edgeIngress == "" {
 		return errors.New("-facade-listen is set but -edge-ingress is empty: the facade would admit submissions it cannot publish")

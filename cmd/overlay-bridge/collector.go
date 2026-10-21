@@ -32,6 +32,8 @@ type collector struct {
 	facade  *facade.Facade
 	queue   *uptunnel.Queue
 	lanes   []*lanes.Lane
+	timings *timings
+	verify  bool
 }
 
 var (
@@ -66,6 +68,11 @@ var (
 	descBuild = prometheus.NewDesc("overlay_bridge_build_info",
 		"Always 1. Labels carry what this BINARY links, read from the embedded build info, not from go.mod. A deployed binary keeps the dependency it was built with for ever and nothing else on the host says which.",
 		[]string{"version", "shard_common", "go_sdk", "go_version"}, nil)
+	descVerifyScripts = prometheus.NewDesc("overlay_bridge_verify_scripts_total",
+		"Input scripts the bridge's SPV verifier ran (inputs of unproven transactions in delivered objects).", nil, nil)
+	descMismatch = prometheus.NewDesc("overlay_bridge_verify_mismatch_total",
+		"Shadow-mode disagreements between the bridge's SPV verdict and the engine's answer, by kind. bridge_ok_engine_refused must stay zero before enforce.",
+		[]string{"kind"}, nil)
 	descLaneBound = prometheus.NewDesc("overlay_bridge_lane_bound",
 		"1 when a lane's listener is open.", []string{"lane"}, nil)
 )
@@ -74,7 +81,7 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
 		descFeed, descSteak, descHeaders, descTip, descRoots, descFacade,
 		descQueue, descQueueDepth, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
-		descBuild,
+		descBuild, descVerifyScripts, descMismatch,
 	} {
 		ch <- d
 	}
@@ -164,6 +171,14 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descFeed, s.Sunk, "sunk")
 		counter(ch, descFeed, s.Shed, "shed")
 		counter(ch, descFeed, s.Retried, "retried")
+		counter(ch, descFeed, s.EngineRefused, "engine_refused")
+		counter(ch, descFeed, s.SPVRefused, "spv_refused")
+		if c.verify {
+			counter(ch, descVerifyScripts, s.VerifyScripts)
+			for _, k := range feed.MismatchKinds {
+				counter(ch, descMismatch, s.Mismatch[k], k)
+			}
+		}
 		// Preset every elected topic's outcomes at zero before emitting what
 		// actually happened.
 		//
@@ -264,5 +279,8 @@ func (c *collector) ready() bool {
 func (c *collector) handler() http.Handler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(c)
+	if c.timings != nil {
+		reg.MustRegister(c.timings.verify, c.timings.submit)
+	}
 	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 }

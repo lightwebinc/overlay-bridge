@@ -44,6 +44,7 @@ public packages, never forked.
 - [Architecture](docs/architecture.md): the feed, the header store, the facade and the loop guard, and what each holds
 - [Configuration](docs/configuration.md): every flag, defaults, the modes, and the startup checks that refuse a half-configured host
 - [The header feeder](docs/header-feeder.md): the header lane as a chain tracker, the two read shapes, anchoring and re-anchoring
+- [SPV verification](docs/spv.md): verify delivered objects in Go (`-verify off|shadow|enforce`), and the loopback trust marker that lets the engine skip its script checks
 - [Deliver once](docs/deliver-once.md): one delivery slot per landing site, and how a site that runs several bridges fans out locally
 - [Metrics reference](docs/references/prometheusMetrics.md): every `overlay_bridge_*` series, its labels and meaning
 - [Contracts and open items](docs/contracts.md): what has been proven against the released engines, and what is not yet settled
@@ -78,6 +79,10 @@ make verify        # what CI runs: formatting, vet, tests under -race, licence f
 # Sink: terminate the lanes, count, discard. Burn in a delivery slot before
 # an engine exists.
 ./overlay-bridge -mode sink
+
+# Feed with SPV in the bridge, shadowing the engine's own verification.
+./overlay-bridge -mode feed -engine http://127.0.0.1:8080 -topics tm_example \
+  -header-anchor http://127.0.0.1:9188 -verify shadow
 ```
 
 Feed and full (facade plus publish) examples, every flag and the default ports
@@ -94,6 +99,7 @@ are in [docs/configuration.md](docs/configuration.md).
 ├── uptunnel/            # one publication per submission to the fabric ingress, with failover
 ├── guard/               # the bounded loop guard on object identity
 ├── topics/              # elected topic names and their identifiers
+├── pkg/spv/             # SPV verifier and trust marker, reusable by a Go overlay engine
 ├── docs/                # architecture, configuration, contracts, deliver-once, header-feeder, references/
 ├── Dockerfile
 ├── Makefile

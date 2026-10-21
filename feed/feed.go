@@ -31,6 +31,7 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/overlay"
 	"github.com/lightwebinc/overlay-bridge/guard"
+	"github.com/lightwebinc/overlay-bridge/pkg/spv"
 	"github.com/lightwebinc/shard-common/objfmt"
 	"github.com/lightwebinc/teranode-bridge/lanes"
 	"github.com/lightwebinc/teranode-bridge/registry"
@@ -92,6 +93,20 @@ type Feed struct {
 	QueueDepth int
 	Log        *slog.Logger
 
+	// Verify is the bridge's own SPV verifier, used as VerifyMode says. Nil,
+	// or VerifyMode off, leaves verification to the engine alone.
+	Verify     Verifier
+	VerifyMode VerifyMode
+	// MarkerKey is the key the enforce-mode trust marker is computed under
+	// (pkg/spv). Without one, enforce still drops refused objects but sends
+	// passing ones unmarked, so the engine verifies them too.
+	MarkerKey []byte
+	// OnVerified is told of every verdict; OnSubmitted of every submit's
+	// outcome and its time from lane arrival to the engine's answer. Both run
+	// on a worker and must not block.
+	OnVerified  func(spv.Verdict)
+	OnSubmitted func(outcome string, d time.Duration)
+
 	c counters
 
 	qmu     sync.Mutex
@@ -115,8 +130,9 @@ func (f *Feed) queue() chan job {
 }
 
 type job struct {
-	names  []string
-	object []byte
+	names   []string
+	object  []byte
+	arrived time.Time
 }
 
 // ErrShed reports a delivery refused because the engine queue was full.
@@ -142,7 +158,7 @@ func (f *Feed) Start(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case j := <-q:
-					f.submitAll(ctx, j.names, j.object)
+					_ = f.process(ctx, j)
 				}
 			}
 		}()
@@ -177,6 +193,7 @@ func (f *Feed) maxObject() int {
 // policy: the sender's problem, counted separately, connection kept. Any other
 // error is ours or the engine's. Neither drops the connection.
 func (f *Feed) Handle(ctx context.Context, record []byte) error {
+	arrived := time.Now()
 	topicID, payload, n, err := objfmt.DecodeBEEFDelivery(record)
 	if err != nil {
 		f.c.add(&f.c.parseError)
@@ -270,7 +287,7 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		}
 		q := f.queue()
 		select {
-		case q <- job{names: names, object: owned}:
+		case q <- job{names: names, object: owned, arrived: arrived}:
 			return nil
 		default:
 			f.c.add(&f.c.shed)
@@ -278,19 +295,7 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 			return ErrShed
 		}
 	}
-	return f.submitAll(ctx, names, owned)
-}
-
-// submitAll submits one object to each of its topics here, booking each
-// answer; the first error is returned after every topic has been tried.
-func (f *Feed) submitAll(ctx context.Context, names []string, object []byte) error {
-	var first error
-	for _, name := range names {
-		if err := f.submitOne(ctx, name, object); err != nil && first == nil {
-			first = err
-		}
-	}
-	return first
+	return f.process(ctx, job{names: names, object: owned, arrived: arrived})
 }
 
 // defaultSubmitRetries and defaultSubmitBackoff give up after roughly half a
@@ -322,21 +327,29 @@ func (f *Feed) submitBackoff() time.Duration {
 // submitOne submits one object and books the engine's answer, retrying a
 // bounded number of times before giving up.
 //
-// Only a TRANSPORT-shaped failure is retried, which is what "the engine is
-// unreachable" looks like. An engine that answered is not retried even when
-// the answer is useless: re-submitting an object the engine has already
-// rejected on its merits would loop until the budget ran out and then book the
-// same failure, having doubled the load for nothing.
-func (f *Feed) submitOne(ctx context.Context, name string, object []byte) error {
+// A transport failure or a 5xx is retried, which is what "the engine is
+// unreachable" or "restarting" looks like. A 4xx is not: it is the engine
+// refusing the object on its merits, and re-submitting it would loop until
+// the budget ran out and then book the same failure, having multiplied the
+// load for nothing.
+//
+// marker, when not empty, is the SPV trust marker for this object.
+func (f *Feed) submitOne(ctx context.Context, name string, object []byte, marker string, arrived time.Time) error {
 	retries := f.submitRetries()
 	backoff := f.submitBackoff()
 	var err error
 	for attempt := 0; ; attempt++ {
 		var steak overlay.Steak
-		steak, err = f.Submit.Submit(ctx, name, object)
+		if ms, ok := f.Submit.(MarkedSubmitter); ok && marker != "" {
+			steak, err = ms.SubmitMarked(ctx, name, object, marker)
+		} else {
+			steak, err = f.Submit.Submit(ctx, name, object)
+		}
 		if err == nil {
+			oc := outcomeOf(steak, name)
 			f.c.add(&f.c.submitted)
-			f.c.addSteak(name, outcomeOf(steak, name))
+			f.c.addSteak(name, oc)
+			f.observeSubmit(oc, arrived)
 			if attempt > 0 {
 				f.c.add(&f.c.retried)
 				if f.Log != nil {
@@ -344,6 +357,14 @@ func (f *Feed) submitOne(ctx context.Context, name string, object []byte) error 
 				}
 			}
 			return nil
+		}
+		if Refused(err) {
+			f.c.add(&f.c.engineRefused)
+			f.observeSubmit(OutcomeRefused, arrived)
+			if f.Log != nil {
+				f.Log.Warn("feed: engine refused the object", "topic", name, "err", err)
+			}
+			return fmt.Errorf("feed: submit %s: %w", name, err)
 		}
 		if attempt >= retries || ctx.Err() != nil {
 			break
@@ -355,6 +376,7 @@ func (f *Feed) submitOne(ctx context.Context, name string, object []byte) error 
 		}
 	}
 	f.c.add(&f.c.engineError)
+	f.observeSubmit(OutcomeEngineError, arrived)
 	if f.Log != nil {
 		f.Log.Warn("feed: engine submit failed, object DROPPED",
 			"topic", name, "attempts", retries+1, "err", err)

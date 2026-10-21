@@ -20,6 +20,13 @@ const (
 	// OutcomeError: the engine answered 200 with no entry for the topic we
 	// submitted. That is a contract violation by the host, not a duplicate.
 	OutcomeError = "error"
+	// OutcomeRefused: the engine answered 4xx, refusing the object on its
+	// merits (an invalid or malformed BEEF). Used on the submit-duration
+	// histogram only.
+	OutcomeRefused = "refused"
+	// OutcomeEngineError: the engine could not be reached, or answered 5xx,
+	// through every retry. Used on the submit-duration histogram only.
+	OutcomeEngineError = "engine_error"
 )
 
 // Stats is a point-in-time snapshot of the feed's counters.
@@ -46,14 +53,41 @@ type Stats struct {
 	// is an object the host did NOT receive from the plane. Non-zero means the
 	// engine cannot keep up with delivery and the host is relying on its own
 	// catch-up to close the gap.
-	Shed  uint64
-	Steak map[SteakKey]uint64
+	Shed uint64
+	// EngineRefused counts submits the engine answered 4xx: refused on the
+	// object's merits, never retried.
+	EngineRefused uint64
+	// SPVRefused counts objects the bridge's own verifier refused in
+	// enforce mode. Each was NOT submitted.
+	SPVRefused uint64
+	// VerifyScripts counts input scripts the bridge's verifier ran.
+	VerifyScripts uint64
+	// Mismatch counts shadow-mode disagreements with the engine, by kind.
+	Mismatch map[string]uint64
+	Steak    map[SteakKey]uint64
 }
 
 type counters struct {
 	mu                                                                              sync.Mutex
 	submitted, engineError, parseError, unknownTopic, rejected, sunk, shed, retried uint64
+	engineRefused, spvRefused, verifyScripts                                        uint64
+	mismatch                                                                        map[string]uint64
 	steak                                                                           map[SteakKey]uint64
+}
+
+func (c *counters) addN(field *uint64, n uint64) {
+	c.mu.Lock()
+	*field += n
+	c.mu.Unlock()
+}
+
+func (c *counters) addMismatch(kind string) {
+	c.mu.Lock()
+	if c.mismatch == nil {
+		c.mismatch = make(map[string]uint64)
+	}
+	c.mismatch[kind]++
+	c.mu.Unlock()
 }
 
 func (c *counters) add(field *uint64) {
@@ -75,15 +109,22 @@ func (c *counters) snapshot() Stats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := Stats{
-		Submitted:    c.submitted,
-		EngineError:  c.engineError,
-		Retried:      c.retried,
-		ParseError:   c.parseError,
-		UnknownTopic: c.unknownTopic,
-		Rejected:     c.rejected,
-		Sunk:         c.sunk,
-		Shed:         c.shed,
-		Steak:        make(map[SteakKey]uint64, len(c.steak)),
+		Submitted:     c.submitted,
+		EngineError:   c.engineError,
+		Retried:       c.retried,
+		ParseError:    c.parseError,
+		UnknownTopic:  c.unknownTopic,
+		Rejected:      c.rejected,
+		Sunk:          c.sunk,
+		Shed:          c.shed,
+		EngineRefused: c.engineRefused,
+		SPVRefused:    c.spvRefused,
+		VerifyScripts: c.verifyScripts,
+		Mismatch:      make(map[string]uint64, len(c.mismatch)),
+		Steak:         make(map[SteakKey]uint64, len(c.steak)),
+	}
+	for k, v := range c.mismatch {
+		s.Mismatch[k] = v
 	}
 	for k, v := range c.steak {
 		s.Steak[k] = v

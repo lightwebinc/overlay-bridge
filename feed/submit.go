@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/overlay"
+	"github.com/lightwebinc/overlay-bridge/pkg/spv"
 )
 
 // Submitter posts one BEEF object to one topic on a BRC-22 engine.
@@ -30,6 +32,30 @@ type Answer struct {
 	// read the reply, which defeats the point of serving the engine's own
 	// interface.
 	Wrapped bool
+}
+
+// MarkedSubmitter is a Submitter that can attach the SPV trust marker. The
+// marker is a header value (see pkg/spv); the empty string sends none.
+type MarkedSubmitter interface {
+	SubmitMarked(ctx context.Context, topic string, object []byte, marker string) (overlay.Steak, error)
+}
+
+// StatusError is an engine that ANSWERED with a status other than 200. A 4xx
+// is the engine refusing the object on its merits (a malformed or invalid
+// BEEF); a 5xx is the engine failing.
+type StatusError struct {
+	Code int
+	Body string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("engine returned %d %s: %s", e.Code, http.StatusText(e.Code), e.Body)
+}
+
+// Refused reports whether err is the engine refusing the object (a 4xx).
+func Refused(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Code >= 400 && se.Code < 500
 }
 
 // DetailSubmitter is a Submitter that also reports the answer's wrapper form.
@@ -68,6 +94,7 @@ type Client struct {
 var (
 	_ Submitter       = (*Client)(nil)
 	_ DetailSubmitter = (*Client)(nil)
+	_ MarkedSubmitter = (*Client)(nil)
 )
 
 // submitResponse is the Go engine's wrapper. The TypeScript engine answers the
@@ -107,8 +134,20 @@ func (c *Client) Submit(ctx context.Context, topic string, object []byte) (overl
 	return a.Steak, err
 }
 
+// SubmitMarked is Submit with the SPV trust marker attached, when marker is
+// not empty. Only the feed sends one, and only for an object its own verifier
+// passed; the facade never does.
+func (c *Client) SubmitMarked(ctx context.Context, topic string, object []byte, marker string) (overlay.Steak, error) {
+	a, err := c.submit(ctx, topic, object, marker)
+	return a.Steak, err
+}
+
 // SubmitDetail is Submit, and also reports the answer's wrapper form.
 func (c *Client) SubmitDetail(ctx context.Context, topic string, object []byte) (Answer, error) {
+	return c.submit(ctx, topic, object, "")
+}
+
+func (c *Client) submit(ctx context.Context, topic string, object []byte, marker string) (Answer, error) {
 	if c.Base == "" {
 		return Answer{}, fmt.Errorf("feed: no engine base configured")
 	}
@@ -124,6 +163,9 @@ func (c *Client) SubmitDetail(ctx context.Context, topic string, object []byte) 
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("x-topics", topic)
+	if marker != "" {
+		req.Header.Set(spv.MarkerHeader, marker)
+	}
 	req.ContentLength = int64(len(object))
 
 	resp, err := c.httpClient().Do(req)
@@ -140,7 +182,7 @@ func (c *Client) SubmitDetail(ctx context.Context, topic string, object []byte) 
 		return Answer{}, fmt.Errorf("feed: read submit response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Answer{}, fmt.Errorf("feed: engine returned %s: %s", resp.Status, snippet(body))
+		return Answer{}, fmt.Errorf("feed: %w", &StatusError{Code: resp.StatusCode, Body: snippet(body)})
 	}
 	return decodeAnswer(body)
 }

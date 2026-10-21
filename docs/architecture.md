@@ -59,6 +59,12 @@ Every length an object declares is therefore checked against the bytes actually
 present before anything of that size is allocated. A parser failure is a
 rejected object, not an incident.
 
+With `-verify shadow` or `-verify enforce` each object is verified by SPV on
+a worker (`pkg/spv`, against the header store in process) before it is
+submitted. Enforce drops a refused object and marks a passing one so that the
+engine can skip its own script checks. See [SPV verification](spv.md) for the
+modes and the trust boundary.
+
 ## headers (down)
 
 Bare 80-byte headers arrive on their own lane, are proof-of-work checked and

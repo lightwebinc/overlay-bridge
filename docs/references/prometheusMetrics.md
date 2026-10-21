@@ -24,7 +24,11 @@ are exported. All values are read from component counters at scrape time.
 | Name | Type | Labels | Meaning |
 |------|------|--------|---------|
 | `overlay_bridge_build_info` | Gauge | `version`, `shard_common`, `go_sdk`, `go_version` | Always 1. Labels carry what the running binary links, read from embedded build info. |
-| `overlay_bridge_feed_total` | Counter | `outcome` = `submitted`, `engine_error`, `parse_error`, `unknown_topic`, `rejected`, `sunk`, `shed`, `retried` | Delivery records handled by the feed. |
+| `overlay_bridge_feed_total` | Counter | `outcome` = `submitted`, `engine_error`, `parse_error`, `unknown_topic`, `rejected`, `sunk`, `shed`, `retried`, `engine_refused` (engine 4xx, not retried), `spv_refused` (enforce mode: not submitted) | Delivery records handled by the feed. |
+| `overlay_bridge_verify_duration_seconds` | Histogram | `result` = `ok`, `refused`, `error` | One SPV verification by the bridge (go-sdk). Buckets 0.0001 to 0.1 s, as the engine's `overlay_host_verify_duration_seconds`. Present only with `-verify` on. See [SPV](../spv.md) |
+| `overlay_bridge_verify_scripts_total` | Counter | | Input scripts the verifier ran |
+| `overlay_bridge_verify_mismatch_total` | Counter | `kind` = `bridge_ok_engine_refused`, `bridge_refused_engine_ok` | Shadow-mode disagreements with the engine. `bridge_ok_engine_refused` must be zero before enforce |
+| `overlay_bridge_engine_submit_duration_seconds` | Histogram | `outcome` = `admitted`, `empty`, `error`, `refused`, `engine_error` | Lane arrival to the engine's answer, per topic submit |
 | `overlay_bridge_engine_submits_total` | Counter | `topic`, `outcome` = `admitted`, `empty`, `error` | Engine submits by topic and admittance outcome. Preset at zero for every elected topic. |
 | `overlay_bridge_headers_total` | Counter | `outcome` = `observed`, `rejected`, `orphaned`, `reanchored`, `replaced`, `pruned` | Headers seen on the header lane. |
 | `overlay_bridge_header_tip_height` | Gauge | none | Best chained block height. Flat with a live lane is the outage signature. |

@@ -41,7 +41,18 @@ subscription and this configuration have drifted apart, so alert on it.
 | `-engine-queue` | `256` | deliveries queued behind the workers. A full queue sheds: the delivery is counted, logged and refused, and the host misses that object until its own catch-up finds it |
 | `-engine-retries` | `4` | retries for a failed submit before the object is dropped; `-1` disables |
 
-Non-zero `shed` means the engine cannot keep up.
+Non-zero `shed` means the engine cannot keep up. An engine that answers 4xx
+refused the object on its merits; that is counted as `engine_refused` and is
+not retried.
+
+## SPV verification
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `-verify` | `off` | `off`, `shadow` (verify and compare, submit as before) or `enforce` (do not submit a refused object; mark a passing one). See [SPV verification](spv.md) |
+| `-verify-network` | `main` | activation heights scripts are judged under: `main`, `test`, or `all` (every rule from block 0, for a regtest-style chain) |
+| `-verify-marker-key` | (none) | file holding the trust-marker key, mode 0600, at least 32 bytes; **required** for `enforce`, and startup fails without it |
+| `-verify-timeout` | `5s` | ceiling on one verification; past it the object goes to the engine unmarked |
 
 ## Headers
 
