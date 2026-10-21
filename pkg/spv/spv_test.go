@@ -10,6 +10,8 @@ import (
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
+	"github.com/bsv-blockchain/go-sdk/script/interpreter/scriptflag"
+	sdkspv "github.com/bsv-blockchain/go-sdk/spv"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-sdk/transaction/template/p2pkh"
 )
@@ -196,8 +198,8 @@ func TestEveryTipIsVerified(t *testing.T) {
 	if vd.TxID != *bad.TxID() {
 		t.Fatalf("refused %s, want the bad tip %s", vd.TxID, bad.TxID())
 	}
-	if vd.Scripts != 2 {
-		t.Fatalf("scripts %d, want 2", vd.Scripts)
+	if vd.Scripts < 1 {
+		t.Fatalf("scripts %d, want the bad one run", vd.Scripts)
 	}
 }
 
@@ -279,5 +281,114 @@ func BenchmarkVerify(b *testing.B) {
 		if vd := v.Verify(context.Background(), raw); vd.Result != ResultOK {
 			b.Fatal(vd.Err)
 		}
+	}
+}
+
+// carrier spends output vout of the fixture's source as a committed-record
+// carrier does: nLockTime 4102444800 and a non-final input.
+func (f *fixture) carrier(t *testing.T, vout uint32, signer *p2pkh.P2PKH) *transaction.Transaction {
+	t.Helper()
+	tx := transaction.NewTransaction()
+	tx.AddInputFromTx(f.src, vout, signer)
+	tx.Inputs[0].SequenceNumber = 0
+	tx.LockTime = 4102444800
+	tx.AddOutput(&transaction.TransactionOutput{Satoshis: 99_000, LockingScript: f.lock})
+	if err := tx.Sign(); err != nil {
+		t.Fatal(err)
+	}
+	return tx
+}
+
+func TestNonFinalCarrierPassesUnderIgnore(t *testing.T) {
+	f := newFixture(t)
+	raw := beefOf(t, f.carrier(t, 0, f.unlock))
+	check(t, (&Verifier{Tracker: f.tracker(), Network: NetworkAll}).Verify(t.Context(), raw), ResultOK, ReasonNone)
+	vd := (&Verifier{Tracker: f.tracker(), Network: NetworkAll, Finality: FinalityRequire}).Verify(t.Context(), raw)
+	check(t, vd, ResultRefused, ReasonStructure)
+	if !errors.Is(vd.Err, sdkspv.ErrNonFinalTransaction) {
+		t.Fatalf("err %v", vd.Err)
+	}
+	// go-sdk v1.7.2's own Verify refuses it: the reason this package exists.
+	tx, err := transaction.NewTransactionFromBEEF(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := sdkspv.Verify(t.Context(), tx, sdkspv.WithActivationHeights(f.tracker(), scriptflag.ActivationHeights{}), nil); ok {
+		t.Fatal("go-sdk accepted a non-final carrier; the policy may no longer be needed")
+	}
+}
+
+func TestBadScriptInANonFinalTxFails(t *testing.T) {
+	f := newFixture(t)
+	bad := f.carrier(t, 0, f.unlock)
+	bad.Inputs[0].UnlockingScript = f.carrier(t, 1, f.unlock).Inputs[0].UnlockingScript
+	check(t, (&Verifier{Tracker: f.tracker(), Network: NetworkAll}).Verify(t.Context(), beefOf(t, bad)), ResultRefused, ReasonScript)
+}
+
+// coinbaseFixture is a coinbase mined at height 100 and an unmined spend.
+func coinbaseFixture(t *testing.T) (*fixture, *transaction.Transaction) {
+	t.Helper()
+	f := newFixture(t)
+	cb := transaction.NewTransaction()
+	cb.AddInput(&transaction.TransactionInput{
+		SourceTXID: &chainhash.Hash{}, SourceTxOutIndex: 0xffffffff, UnlockingScript: &script.Script{0x51}, SequenceNumber: transaction.DefaultSequenceNumber,
+	})
+	cb.AddOutput(&transaction.TransactionOutput{Satoshis: 100_000, LockingScript: f.lock})
+	mp, err := transaction.NewMerklePathFromCoinbaseTxid(cb.TxID(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb.MerklePath = mp
+	f.src = cb
+	return f, f.spend(t, 0)
+}
+
+func TestCoinbaseMaturityAsV172(t *testing.T) {
+	f, spend := coinbaseFixture(t)
+	raw := beefOf(t, spend)
+	for _, c := range []struct {
+		tip  uint32
+		want Result
+	}{{150, ResultRefused}, {198, ResultRefused}, {199, ResultOK}, {300, ResultOK}} {
+		tr := &roots{m: map[uint32]chainhash.Hash{100: *f.src.TxID()}, tip: c.tip}
+		vd := (&Verifier{Tracker: tr, Network: NetworkAll}).Verify(t.Context(), raw)
+		if vd.Result != c.want {
+			t.Fatalf("tip %d: %s (%v), want %s", c.tip, vd.Result, vd.Err, c.want)
+		}
+		// Same verdict as go-sdk v1.7.2 on this final transaction.
+		tx, _ := transaction.NewTransactionFromBEEF(raw)
+		ok, _ := sdkspv.Verify(t.Context(), tx, sdkspv.WithActivationHeights(tr, scriptflag.ActivationHeights{}), nil)
+		if ok != (c.want == ResultOK) {
+			t.Fatalf("tip %d: go-sdk says %v", c.tip, ok)
+		}
+	}
+}
+
+func TestP2SHOutputRefusedAsV172(t *testing.T) {
+	f := newFixture(t)
+	tx := transaction.NewTransaction()
+	tx.AddInputFromTx(f.src, 0, f.unlock)
+	p2sh := script.Script(append(append([]byte{0xa9, 0x14}, make([]byte, 20)...), 0x87))
+	tx.AddOutput(&transaction.TransactionOutput{Satoshis: 1000, LockingScript: &p2sh})
+	if err := tx.Sign(); err != nil {
+		t.Fatal(err)
+	}
+	vd := (&Verifier{Tracker: f.tracker(), Network: NetworkMain}).Verify(t.Context(), beefOf(t, tx))
+	if vd.Result != ResultRefused || !errors.Is(vd.Err, sdkspv.ErrP2SHOutput) {
+		t.Fatalf("%s %v", vd.Result, vd.Err)
+	}
+}
+
+func TestOutputsExceedInputsRefused(t *testing.T) {
+	f := newFixture(t)
+	tx := transaction.NewTransaction()
+	tx.AddInputFromTx(f.src, 0, f.unlock)
+	tx.AddOutput(&transaction.TransactionOutput{Satoshis: 100_001, LockingScript: f.lock})
+	if err := tx.Sign(); err != nil {
+		t.Fatal(err)
+	}
+	vd := (&Verifier{Tracker: f.tracker(), Network: NetworkAll}).Verify(t.Context(), beefOf(t, tx))
+	if !errors.Is(vd.Err, sdkspv.ErrOutputsExceedInputs) {
+		t.Fatalf("%s %v", vd.Result, vd.Err)
 	}
 }

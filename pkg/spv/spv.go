@@ -20,7 +20,9 @@
 // verification for any transaction in it without depending on the two parsers
 // agreeing on which one the subject is.
 //
-// The checks are the go-sdk's spv.Verify: merkle paths first, then for each
+// The checks are go-sdk v1.7.2 spv.Verify's, run here from go-sdk's
+// primitives (merkle path, script interpreter, activation heights) so that
+// finality is a policy (FinalityPolicy, see check.go): merkle paths first, then for each
 // unproven transaction bitcoin-sv's own rules (inputs and outputs present, no
 // duplicate input, amounts in range, outputs not exceeding inputs, finality,
 // coinbase maturity, scripts under the network's activation heights). That is
@@ -135,6 +137,9 @@ type Verifier struct {
 	Tracker chaintracker.ChainTracker
 	// Network selects activation heights. Empty means NetworkMain.
 	Network Network
+	// Finality is the finality policy. Empty means FinalityIgnore, the
+	// overlay plane's policy (see FinalityPolicy).
+	Finality FinalityPolicy
 	// Timeout bounds one verification. Zero means 5 s. A script that runs
 	// past it ends the verification with ResultError, never ResultOK.
 	Timeout time.Duration
@@ -189,14 +194,15 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 		id := id
 		linked[id] = beef.FindAtomicTransactionByHash(&id)
 	}
-	for _, id := range txids {
-		if tx := linked[id]; tx != nil && tx.MerklePath == nil {
-			vd.Scripts += len(tx.Inputs)
-		}
-	}
-
 	tracker := &watchTracker{inner: v.Tracker}
-	ct := sdkspv.WithActivationHeights(tracker, v.Network.heights())
+	fin := v.Finality
+	if fin == "" {
+		fin = FinalityIgnore
+	}
+	g := &graph{
+		ctx: ctx, tracker: tracker, heights: v.Network.heights(), finality: fin,
+		txids: map[*transaction.Transaction]chainhash.Hash{}, mined: map[chainhash.Hash]uint32{},
+	}
 	for _, id := range txids {
 		if spent[id] {
 			continue // verified as an ancestor of the tip that spends it
@@ -206,17 +212,14 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 			continue
 		}
 		vd.TxID = id
-		ok, err := sdkspv.Verify(ctx, tx, ct, nil)
-		if ok && err == nil {
-			continue
+		if err := g.check(tx); err != nil {
+			vd.Result, vd.Reason, vd.Err = classify(ctx, tracker, err)
+			vd.Scripts = g.scripts
+			return vd
 		}
-		vd.Result, vd.Reason, vd.Err = classify(ctx, tracker, err)
-		if vd.Err == nil {
-			vd.Err = errors.New("spv: verification returned false")
-		}
-		return vd
 	}
 	vd.Result = ResultOK
+	vd.Scripts = g.scripts
 	return vd
 }
 

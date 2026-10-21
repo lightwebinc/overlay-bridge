@@ -51,6 +51,7 @@ not retried.
 | --- | --- | --- |
 | `-verify` | `off` | `off`, `shadow` (verify and compare, submit as before) or `enforce` (do not submit a refused object; mark a passing one). See [SPV verification](spv.md) |
 | `-verify-network` | `main` | activation heights scripts are judged under: `main`, `test`, or `all` (every rule from block 0, for a regtest-style chain) |
+| `-verify-finality` | `ignore` | finality policy for unmined transactions: `ignore` (the overlay plane; committed-record carriers are non-final by design) or `require` (bitcoin-sv's rule). See [SPV verification](spv.md) |
 | `-verify-marker-key` | (none) | file holding the trust-marker key, mode 0600, at least 32 bytes; **required** for `enforce`, and startup fails without it |
 | `-verify-timeout` | `5s` | ceiling on one verification; past it the object goes to the engine unmarked |
 

@@ -26,15 +26,37 @@ The Go checks are stricter than the TypeScript SDK's `verify`, which checks
 paths, amounts and scripts only. Shadow mode exists to measure any
 disagreement this causes before anything relies on it.
 
-### Known disagreement: non-final carriers
+### Finality is a policy (`-verify-finality`, default `ignore`)
 
-go-sdk v1.7.2 applies bitcoin-sv's finality rule. Committed-record carriers
-are unmined transactions with `nLockTime = 4102444800` and a non-final
-input, used by design so that they can never be mined. The bridge therefore
-refuses them as "not final", while the TypeScript engine admits them. In lab
-shadow this is `bridge_refused_engine_ok` on every bbox object. Until this is
-resolved, `enforce` would drop every carrier, so it must not be turned on.
-The go-sdk exposes no option that skips finality alone.
+Committed-record carriers are unmined transactions that are non-final **by
+design**: `nLockTime = 4102444800` (2100-01-01) with a non-final input, so
+they can never be mined. An overlay admits a carrier when its scripts, proofs
+and amounts are valid, and the TypeScript engine does exactly that.
+
+go-sdk v1.7.2's `spv.Verify` applies bitcoin-sv's finality rule, and it has
+no option to switch that rule off on its own. Under the owner ruling of
+2026-10-21 ("own policy on v1.7.2"), `pkg/spv` therefore does not call
+`spv.Verify`. It runs the same checks itself, built from go-sdk's
+primitives: `MerklePath.Verify`, the script interpreter, and activation-height
+flags. Finality is an explicit `FinalityPolicy`:
+
+- `ignore`: the overlay plane's policy and the default. Finality is not
+  checked.
+- `require`: bitcoin-sv's rule, as v1.7.2 applies it.
+
+Every other v1.7.2 check is kept: source-txid match, merkle paths before any
+height is used, no unmined coinbase, inputs and outputs present, amounts
+within `MAX_MONEY`, no P2SH output, no null outpoint, no duplicate input, no
+confiscation transaction, every spent output present, coinbase maturity
+(100), confiscation maturity (1000), outputs not exceeding inputs, and
+scripts under the era flags (including P2SH-shaped coins being judged as
+pre-Genesis). Under `require`, a time-based lock is always refused, as in
+v1.7.2, because the header store does not report a median time past.
+
+One v1.7.2 refinement is not reproduced. v1.7.2 skips re-verifying
+transactions it has already verified (pointer-distinct copies that share a
+txid and the same evidence). Here each Transaction value is verified once
+per tip. That is a cost difference only. The checks are the same.
 
 ## Modes (`-verify`)
 

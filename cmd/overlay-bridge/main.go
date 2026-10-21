@@ -69,6 +69,7 @@ type config struct {
 
 	verifyMode      string
 	verifyNetwork   string
+	verifyFinality  string
 	verifyMarkerKey string
 	verifyTimeout   time.Duration
 }
@@ -105,6 +106,7 @@ func main() {
 	flag.DurationVar(&c.statsEvery, "stats-every", time.Minute, "stats line interval; 0 = off")
 	flag.StringVar(&c.verifyMode, "verify", "off", "bridge-side SPV of delivered objects: off | shadow (verify and compare, submit as before) | enforce (drop refused objects, mark passing ones)")
 	flag.StringVar(&c.verifyNetwork, "verify-network", "main", "activation heights scripts are judged under: main | test | all (every rule from block 0; regtest-style chains)")
+	flag.StringVar(&c.verifyFinality, "verify-finality", "ignore", "finality policy for unmined transactions: ignore (the overlay plane: committed-record carriers are non-final by design) | require (bitcoin-sv's rule)")
 	flag.StringVar(&c.verifyMarkerKey, "verify-marker-key", "", "file holding the key the enforce-mode trust marker is computed under; mode 0600; required for enforce")
 	flag.DurationVar(&c.verifyTimeout, "verify-timeout", 5*time.Second, "ceiling on one verification; past it the object goes to the engine unmarked")
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -163,8 +165,9 @@ func run(c config, log *slog.Logger) error {
 		OnSubmitted:   tim.onSubmitted,
 	}
 	if vmode != feed.VerifyOff {
-		network, _ := spv.ParseNetwork(c.verifyNetwork) // validated above
-		f.Verify = &spv.Verifier{Tracker: tracker, Network: network, Timeout: c.verifyTimeout}
+		network, _ := spv.ParseNetwork(c.verifyNetwork)    // validated above
+		finality, _ := spv.ParseFinality(c.verifyFinality) // validated above
+		f.Verify = &spv.Verifier{Tracker: tracker, Network: network, Finality: finality, Timeout: c.verifyTimeout}
 		if c.verifyMarkerKey != "" {
 			key, err := spv.LoadKey(c.verifyMarkerKey)
 			if err != nil {
@@ -172,7 +175,7 @@ func run(c config, log *slog.Logger) error {
 			}
 			f.MarkerKey = key
 		}
-		log.Info("bridge SPV verification", "mode", vmode, "network", network, "marker", len(f.MarkerKey) > 0)
+		log.Info("bridge SPV verification", "mode", vmode, "network", network, "finality", c.verifyFinality, "marker", len(f.MarkerKey) > 0)
 	}
 
 	// ---- up-tunnel and the facade.
@@ -339,6 +342,9 @@ func (c config) validate() error {
 	}
 	if _, err := spv.ParseNetwork(c.verifyNetwork); err != nil {
 		return fmt.Errorf("-verify-network: %w", err)
+	}
+	if _, err := spv.ParseFinality(c.verifyFinality); err != nil {
+		return fmt.Errorf("-verify-finality: %w", err)
 	}
 	if c.verifyMode == string(feed.VerifyEnforce) && c.verifyMarkerKey == "" {
 		return errors.New("-verify enforce needs -verify-marker-key: without the marker the engine verifies every object again and enforce only adds a second verification")
