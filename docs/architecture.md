@@ -73,6 +73,23 @@ One listener serves the engine's own submit interface. An accepted submission
 is forwarded to the local engine first, so the client receives the engine's
 real admittance instructions, and then published once onto the plane.
 
+## up-tunnel
+
+Records leave over one long-lived TCP connection to the edge ingress, side A
+then side B. The record stream is one-way, so a successful write proves only
+that the local kernel took the bytes. A record counts as sent
+(`overlay_bridge_publish_total{result="sent"}`) once the ingress host has
+acknowledged it and the connection has then stayed up for a short grace
+window. The bridge reads its own connection, so an ingress that stops or
+restarts is noticed at once rather than at the next write, and TCP keepalive
+with a user timeout bounds a peer that vanished silently. When a connection
+dies, every record on it that is not confirmed is resent on the next one, a
+bounded number of times, and is counted `failed` after that. Resending is safe
+because the plane claims each record by SHA-256(ContentID ‖ TopicID) at
+ingress and egress, and the engine answers a duplicate with an empty
+admittance. A record the ingress process read and then lost before emitting
+it is not visible to the bridge.
+
 ## guard
 
 A bounded seen-set keyed on SHA-256(ContentID ‖ TopicID), the same key the

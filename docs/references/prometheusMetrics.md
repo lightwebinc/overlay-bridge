@@ -30,8 +30,10 @@ are exported. All values are read from component counters at scrape time.
 | `overlay_bridge_header_tip_height` | Gauge | none | Best chained block height. Flat with a live lane is the outage signature. |
 | `overlay_bridge_tracker_roots_total` | Counter | `source` = `lane`, `fallback`, `miss` | Chain-tracker roots answered, by source. |
 | `overlay_bridge_facade_total` | Counter | `result` = `ok`, `malformed`, `unknown_topic`, `loop_dropped`, `engine_error`, `publish_failed` | Submit-facade submissions. |
-| `overlay_bridge_publish_total` | Counter | `result` = `enqueued`, `sent`, `shed`, `failed` | Up-tunnel publications. A shed record is not on the plane. |
+| `overlay_bridge_publish_total` | Counter | `result` = `enqueued`, `sent`, `resent`, `shed`, `failed` | Up-tunnel publications. `sent` is confirmed by the ingress (acknowledged, and the connection stayed up through the grace window), never just written locally. `resent` counts records written again after the connection they were on died. `failed` counts records not written to either address and records lost after their resends. A shed record is not on the plane. |
 | `overlay_bridge_publish_queue_depth` | Gauge | none | Instantaneous publish backlog. |
+| `overlay_bridge_publish_unconfirmed` | Gauge | none | Records written to the up-tunnel and not yet confirmed. |
+| `overlay_bridge_uptunnel_peer_closed_total` | Counter | none | Up-tunnel connections the ingress closed or that failed (EOF, reset, keepalive or user timeout). |
 | `overlay_bridge_guard_entries` | Gauge | none | Loop-guard entries retained. |
 | `overlay_bridge_lane_objects_total` | Counter | `lane` = `beef`, `header`; `outcome` = `objects`, `errors`, `rejected`, `bytes` | Objects (and bytes) read off a lane. |
 | `overlay_bridge_lane_connections_active` | Gauge | `lane` | Connections open on a lane. |

@@ -5,7 +5,12 @@ import (
 	"errors"
 	"log/slog"
 	"sync/atomic"
+	"time"
 )
+
+// DefaultPollInterval is how often the queue asks its client to confirm
+// acknowledged records and resend what a dead connection left behind.
+const DefaultPollInterval = 200 * time.Millisecond
 
 // ErrQueueFull reports that the publish queue is full and the record was not
 // accepted. The caller has NOT published: see [Queue.Publish].
@@ -27,6 +32,8 @@ type Queue struct {
 	c   *Client
 	ch  chan item
 	log *slog.Logger
+	// PollInterval is how often Run polls the client (0 = DefaultPollInterval).
+	PollInterval time.Duration
 
 	enqueued, sent, shed, failed atomic.Uint64
 }
@@ -38,7 +45,15 @@ type item struct {
 }
 
 // QueueStats is a point-in-time snapshot. Depth is the instantaneous backlog.
-type QueueStats struct{ Depth, Capacity, Enqueued, Sent, Shed, Failed uint64 }
+//
+// Sent counts records the ingress confirmed (see the package docs), never a
+// record only written to the local socket. Failed counts records not written
+// to either address and records lost after their resends. Resent, Unconfirmed
+// and PeerClosed come from the client.
+type QueueStats struct {
+	Depth, Capacity, Enqueued, Sent, Shed, Failed uint64
+	Resent, Unconfirmed, PeerClosed               uint64
+}
 
 // NewQueue returns a queue of the given depth in front of c. A non-positive
 // depth takes a small default rather than an unbounded channel: unbounded here
@@ -55,11 +70,13 @@ func NewQueue(c *Client, depth int, log *slog.Logger) *Queue {
 // the queue is full, and the record is then not published. The queue takes
 // ownership of record; the caller must not touch it afterwards.
 //
-// sent, if non-nil, runs on the queue's goroutine once the record has ACTUALLY
-// been written to the tunnel, and never runs if it is not. Acceptance into the
-// queue is not publication: the send can still fail after the caller has
-// answered its client, and anything the caller must only do for a record that
-// reached the plane belongs in sent, not after Publish returns.
+// sent, if non-nil, runs once the ingress has CONFIRMED the record (see the
+// package docs: acknowledged by the ingress host on a connection that then
+// stayed up), and never runs if it is not. Acceptance into the queue is not
+// publication, and neither is a successful local write: the send can still
+// fail after the caller has answered its client, and anything the caller must
+// only do for a record that reached the plane belongs in sent, not after
+// Publish returns.
 //
 // The caller owns the decision about what a refusal means to its own client.
 // The standing ruling is that a shed object is NOT billed, so whatever status a
@@ -88,23 +105,39 @@ func (q *Queue) Publish(ctx context.Context, record []byte, sent func()) error {
 // Run drains the queue into the client until ctx is cancelled. It returns
 // ctx.Err() on cancellation, never a submit error: a failed submission is
 // counted and the next record is attempted, because one unreachable edge must
-// not stop the drain.
+// not stop the drain. Between records it polls the client, which is what
+// confirms records and resends after a dead connection while the queue is
+// idle.
 func (q *Queue) Run(ctx context.Context) error {
+	every := q.PollInterval
+	if every <= 0 {
+		every = DefaultPollInterval
+	}
+	tick := time.NewTicker(every)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-tick.C:
+			q.c.Poll(ctx)
 		case it := <-q.ch:
-			if err := q.c.Submit(ctx, it.rec); err != nil {
+			sent := it.sent
+			done := func(confirmed bool) {
+				if !confirmed {
+					q.failed.Add(1)
+					return
+				}
+				q.sent.Add(1)
+				if sent != nil {
+					sent()
+				}
+			}
+			if err := q.c.Send(ctx, it.rec, done); err != nil {
 				q.failed.Add(1)
 				if q.log != nil {
 					q.log.Error("up-tunnel publish failed; record is not on the plane", "err", err, "bytes", len(it.rec))
 				}
-				continue
-			}
-			q.sent.Add(1)
-			if it.sent != nil {
-				it.sent()
 			}
 		}
 	}
@@ -112,12 +145,16 @@ func (q *Queue) Run(ctx context.Context) error {
 
 // Stats returns a snapshot for the collector.
 func (q *Queue) Stats() QueueStats {
+	cs := q.c.Stats()
 	return QueueStats{
-		Depth:    uint64(len(q.ch)),
-		Capacity: uint64(cap(q.ch)),
-		Enqueued: q.enqueued.Load(),
-		Sent:     q.sent.Load(),
-		Shed:     q.shed.Load(),
-		Failed:   q.failed.Load(),
+		Depth:       uint64(len(q.ch)),
+		Capacity:    uint64(cap(q.ch)),
+		Enqueued:    q.enqueued.Load(),
+		Sent:        q.sent.Load(),
+		Shed:        q.shed.Load(),
+		Failed:      q.failed.Load(),
+		Resent:      cs.Resent,
+		Unconfirmed: cs.Unconfirmed,
+		PeerClosed:  cs.PeerClosed,
 	}
 }

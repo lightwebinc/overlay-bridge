@@ -78,7 +78,7 @@ func TestSubmitWritesWholeRecord(t *testing.T) {
 	if err := c.Submit(context.Background(), rec); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if st := c.Stats(); st.Sent != 1 || st.Bytes != uint64(len(rec)) || st.Redials != 1 {
+	if st := c.Stats(); st.Written != 1 || st.Bytes != uint64(len(rec)) || st.Redials != 1 {
 		t.Fatalf("stats = %+v", st)
 	}
 }
@@ -101,7 +101,7 @@ func TestFailoverAdvancesOnDeadPrimary(t *testing.T) {
 	if err := c.Submit(context.Background(), []byte("record")); err != nil {
 		t.Fatalf("Submit over failover: %v", err)
 	}
-	if st := c.Stats(); st.Sent != 1 || st.Failures == 0 {
+	if st := c.Stats(); st.Written != 1 || st.Failures == 0 {
 		t.Fatalf("stats = %+v, want one send and at least one failure", st)
 	}
 }
