@@ -26,6 +26,16 @@ The Go checks are stricter than the TypeScript SDK's `verify`, which checks
 paths, amounts and scripts only. Shadow mode exists to measure any
 disagreement this causes before anything relies on it.
 
+### Known disagreement: non-final carriers
+
+go-sdk v1.7.2 applies bitcoin-sv's finality rule. Committed-record carriers
+are unmined transactions with `nLockTime = 4102444800` and a non-final
+input, used by design so that they can never be mined. The bridge therefore
+refuses them as "not final", while the TypeScript engine admits them. In lab
+shadow this is `bridge_refused_engine_ok` on every bbox object. Until this is
+resolved, `enforce` would drop every carrier, so it must not be turned on.
+The go-sdk exposes no option that skips finality alone.
+
 ## Modes (`-verify`)
 
 | Mode | Bridge verifies | Object submitted | Marker | Engine verifies scripts |
