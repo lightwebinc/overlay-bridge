@@ -8,10 +8,14 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -54,6 +58,9 @@ type config struct {
 	headerAnchorTimeout time.Duration
 	headerMinBits       uint
 	headerWindow        uint
+	headerWarm          uint
+	headerWarmWorkers   int
+	headerWarmTimeout   time.Duration
 
 	edgeIngress        string
 	edgeBeefPort       int
@@ -95,6 +102,9 @@ func main() {
 	flag.DurationVar(&c.headerAnchorTimeout, "header-anchor-timeout", 5*time.Second, "bounded; never unbounded")
 	flag.UintVar(&c.headerMinBits, "header-min-bits", 0x207fffff, "reject a header declaring an easier compact target than this")
 	flag.UintVar(&c.headerWindow, "header-window", 0, "retained height window; 0 = unbounded")
+	flag.UintVar(&c.headerWarm, "header-warm", headers.DefaultWarmDepth, "at startup, load the roots of this many heights ending at the anchor from -header-anchor before the lanes open, so a proof against a recent block does not pay the anchor round trip on the verify path; 0 = off")
+	flag.IntVar(&c.headerWarmWorkers, "header-warm-workers", 8, "concurrent anchor reads during the warm-up")
+	flag.DurationVar(&c.headerWarmTimeout, "header-warm-timeout", time.Minute, "ceiling on the warm-up; past it the bridge starts with what it has loaded, and the rest is fetched on first use")
 	flag.StringVar(&c.edgeIngress, "edge-ingress", "", "up-tunnel hosts, comma list in failover order (side A then side B)")
 	flag.IntVar(&c.edgeBeefPort, "edge-beef-port", 8725, "the open ingress port")
 	flag.StringVar(&c.publishSource, "publish-source", "", "local source address for the up-tunnel; the slot inner the facade sources from")
@@ -143,6 +153,7 @@ func run(c config, log *slog.Logger) error {
 		return err
 	}
 	tracker := headers.NewTracker(store)
+	warmStore(ctx, c, store, log)
 
 	// ---- feed: delivered objects become ordinary submits.
 	var submitter feed.DetailSubmitter
@@ -264,6 +275,7 @@ func run(c config, log *slog.Logger) error {
 			lanes:   []*lanes.Lane{beefLane, headerLane},
 			timings: tim,
 			verify:  vmode != feed.VerifyOff,
+			config:  configLabels(c),
 		}
 		tasks.go_("metrics", func(ctx context.Context) error {
 			return serveMetrics(ctx, c.metricsAddr, col, log)
@@ -377,6 +389,45 @@ func buildStore(ctx context.Context, c config, log *slog.Logger) (*headers.Store
 		opt.Anchor = headers.Anchor{Hash: chainhash.Hash{0x01}}
 	}
 	return headers.New(opt)
+}
+
+// configLabels is the overlay_bridge_config_info label set (R7): what a
+// measurement of this process must be stamped with.
+func configLabels(c config) []string {
+	gogc := os.Getenv("GOGC")
+	if gogc == "" {
+		gogc = "100"
+	}
+	limit := "off"
+	if l := debug.SetMemoryLimit(-1); l != math.MaxInt64 {
+		limit = strconv.FormatInt(l, 10)
+	}
+	return []string{
+		c.verifyMode, c.verifyNetwork, c.verifyFinality,
+		strconv.Itoa(c.engineWorkers), strconv.Itoa(runtime.GOMAXPROCS(0)), gogc, limit,
+	}
+}
+
+// warmStore runs the header warm-up before the lanes open, bounded by
+// -header-warm-timeout. It never fails startup: a height it does not load is
+// fetched on first use, as it was before warm-up existed.
+func warmStore(ctx context.Context, c config, store *headers.Store, log *slog.Logger) {
+	if c.headerAnchor == "" || c.headerWarm == 0 {
+		return
+	}
+	wctx, cancel := context.WithTimeout(ctx, c.headerWarmTimeout)
+	defer cancel()
+	err := store.Warm(wctx, uint32(c.headerWarm), c.headerWarmWorkers)
+	st := store.WarmStats()
+	attrs := []any{"target", st.Target, "loaded", st.Loaded, "failed", st.Failed, "took", st.Duration.Round(time.Millisecond)}
+	switch {
+	case err != nil:
+		log.Warn("header warm-up cut short; the rest load on first use", append(attrs, "err", err)...)
+	case st.Failed > 0:
+		log.Warn("header warm-up incomplete; the rest load on first use", attrs...)
+	default:
+		log.Info("header warm-up done", attrs...)
+	}
 }
 
 // resolveSource turns -publish-source into a local address and asserts it

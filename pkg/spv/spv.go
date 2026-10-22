@@ -92,6 +92,13 @@ type Verdict struct {
 	// Transactions is the number of transactions in the object; Scripts is
 	// the number of input scripts run (inputs of unproven transactions).
 	Transactions, Scripts int
+	// Work counters (R2), set whenever the object parsed, whatever the
+	// result. Inputs is every input of every transaction in the object.
+	// Proofs is the number of transactions carrying a merkle path. Depth is
+	// the object's ancestry depth: the longest chain of in-object parents
+	// below any transaction, so a child of a proven parent is 1, and a
+	// lone transaction is 0.
+	Inputs, Proofs, Depth int
 	Duration              time.Duration
 	Err                   error
 }
@@ -185,6 +192,7 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 		}
 	}
 	vd := Verdict{Transactions: len(txids)}
+	vd.Inputs, vd.Proofs, vd.Depth = work(beef)
 	if len(txids) == 0 {
 		vd.Result, vd.Reason, vd.Err = ResultRefused, ReasonParse, errors.New("spv: BEEF holds no transaction")
 		return vd
@@ -241,6 +249,60 @@ func classify(ctx context.Context, t *watchTracker, err error) (Result, Reason, 
 	default:
 		return ResultRefused, ReasonStructure, err
 	}
+}
+
+// work counts an object's inputs and proofs and measures its ancestry depth
+// over the in-object parent links (input source txids that are themselves in
+// the object). It reads the parsed object only, so it costs no verification.
+func work(beef *transaction.Beef) (inputs, proofs, depth int) {
+	parents := make(map[chainhash.Hash][]chainhash.Hash, len(beef.Transactions))
+	for txid, btx := range beef.Transactions {
+		if btx == nil || btx.Transaction == nil {
+			continue
+		}
+		tx := btx.Transaction
+		inputs += len(tx.Inputs)
+		if tx.MerklePath != nil {
+			proofs++
+		}
+		for _, in := range tx.Inputs {
+			if in.SourceTXID == nil {
+				continue
+			}
+			if p, ok := beef.Transactions[*in.SourceTXID]; ok && p != nil && p.Transaction != nil {
+				parents[txid] = append(parents[txid], *in.SourceTXID)
+			}
+		}
+	}
+	// Longest parent chain, memoised. Txids are hashes of the transactions
+	// that name their parents, so the links cannot form a cycle; the
+	// in-progress mark is defence against a parser that ever let one through.
+	memo := make(map[chainhash.Hash]int, len(parents))
+	const visiting = -1
+	var walk func(chainhash.Hash) int
+	walk = func(id chainhash.Hash) int {
+		if d, ok := memo[id]; ok {
+			if d == visiting {
+				return 0
+			}
+			return d
+		}
+		memo[id] = visiting
+		best := 0
+		for _, p := range parents[id] {
+			if d := walk(p) + 1; d > best {
+				best = d
+			}
+		}
+		memo[id] = best
+		return best
+	}
+	for id := range parents {
+		if d := walk(id); d > depth {
+			depth = d
+		}
+	}
+	return inputs, proofs, depth
 }
 
 // parse reads any BEEF version into one Beef.

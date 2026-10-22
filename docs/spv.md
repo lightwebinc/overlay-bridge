@@ -145,6 +145,7 @@ engine verifies them as before.
 | --- | --- |
 | `overlay_bridge_verify_duration_seconds{result}` | One verification. The buckets match the engine's `overlay_host_verify_duration_seconds`, so the two can share a panel |
 | `overlay_bridge_verify_scripts_total` | Input scripts run (inputs of unproven transactions) |
+| `overlay_bridge_verify_object_{txs,inputs,scripts,proofs,ancestor_depth}` | Per-object work (R2) histograms; `_sum / _count` is the mean per object, and a CPU rate over `rate(..._count)` is CPU per object |
 | `overlay_bridge_verify_mismatch_total{kind}` | Shadow disagreements; see above |
 | `overlay_bridge_engine_submit_duration_seconds{outcome}` | Lane arrival to the engine's answer, per topic submit. It is language-neutral and covers the whole path |
 | `overlay_bridge_feed_total{outcome="spv_refused"}` | Objects that enforce mode did not submit |

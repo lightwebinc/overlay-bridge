@@ -392,3 +392,56 @@ func TestOutputsExceedInputsRefused(t *testing.T) {
 		t.Fatalf("%s %v", vd.Result, vd.Err)
 	}
 }
+
+// TestWorkCounters pins the R2 per-object counters for the shapes the replay
+// corpus uses: simple (one input), multi-input, and a deep unproven chain.
+func TestWorkCounters(t *testing.T) {
+	f := newFixture(t)
+	v := &Verifier{Tracker: f.tracker(), Network: NetworkAll}
+
+	// simple: proven parent (1 input from outside the object) + child (1 input).
+	vd := v.Verify(t.Context(), beefOf(t, f.child))
+	check(t, vd, ResultOK, ReasonNone)
+	if vd.Transactions != 2 || vd.Inputs != 2 || vd.Proofs != 1 || vd.Depth != 1 || vd.Scripts != 1 {
+		t.Fatalf("simple: txs %d inputs %d proofs %d depth %d scripts %d, want 2 2 1 1 1",
+			vd.Transactions, vd.Inputs, vd.Proofs, vd.Depth, vd.Scripts)
+	}
+
+	// multi-input: both of the parent's outputs.
+	multi := transaction.NewTransaction()
+	multi.AddInputFromTx(f.src, 0, f.unlock)
+	multi.AddInputFromTx(f.src, 1, f.unlock)
+	multi.AddOutput(&transaction.TransactionOutput{Satoshis: 190_000, LockingScript: f.lock})
+	if err := multi.Sign(); err != nil {
+		t.Fatal(err)
+	}
+	vd = v.Verify(t.Context(), beefOf(t, multi))
+	check(t, vd, ResultOK, ReasonNone)
+	if vd.Inputs != 3 || vd.Depth != 1 || vd.Scripts != 2 {
+		t.Fatalf("multi: inputs %d depth %d scripts %d, want 3 1 2", vd.Inputs, vd.Depth, vd.Scripts)
+	}
+
+	// deep: three unproven generations on the proven parent.
+	tip := f.child
+	for range 2 {
+		next := transaction.NewTransaction()
+		next.AddInputFromTx(tip, 0, f.unlock)
+		next.AddOutput(&transaction.TransactionOutput{Satoshis: tip.Outputs[0].Satoshis - 1_000, LockingScript: f.lock})
+		if err := next.Sign(); err != nil {
+			t.Fatal(err)
+		}
+		tip = next
+	}
+	vd = v.Verify(t.Context(), beefOf(t, tip))
+	check(t, vd, ResultOK, ReasonNone)
+	if vd.Transactions != 4 || vd.Inputs != 4 || vd.Proofs != 1 || vd.Depth != 3 || vd.Scripts != 3 {
+		t.Fatalf("deep: txs %d inputs %d proofs %d depth %d scripts %d, want 4 4 1 3 3",
+			vd.Transactions, vd.Inputs, vd.Proofs, vd.Depth, vd.Scripts)
+	}
+
+	// A refusal still reports the object's shape.
+	vd = v.Verify(t.Context(), []byte("garbage!"))
+	if vd.Inputs != 0 || vd.Depth != 0 {
+		t.Fatalf("unparsed object: inputs %d depth %d, want 0", vd.Inputs, vd.Depth)
+	}
+}

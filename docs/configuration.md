@@ -63,6 +63,9 @@ not retried.
 | `-header-anchor-timeout` | `5s` | this call sits on the lane's hot path |
 | `-header-min-bits` | `0x207fffff` | the compact-target floor. A header declaring an easier target is rejected before its hash is compared |
 | `-header-window` | `0` (unbounded) | retained height window |
+| `-header-warm` | `2016` | heights ending at the anchor whose roots are loaded from the anchor at startup, before the lanes open; `0` = off |
+| `-header-warm-workers` | `8` | concurrent anchor reads during the warm-up |
+| `-header-warm-timeout` | `1m` | ceiling on the warm-up; the bridge then starts with what it loaded |
 
 `-header-min-bits` is the security-relevant one. A header carries the target it
 claims to meet, so checking it only against itself is a check the sender writes
@@ -77,6 +80,17 @@ parent this host never saw is counted `orphaned` and dropped, which is the
 state of every host that has just restarted; the lane looks healthy while
 `overlay_bridge_header_tip_height` never moves. Another `overlay-bridge` serves
 all three.
+
+**Warm-up.** The lane is a live tail, so every height at or below the anchor
+is answered by the anchor. Without warm-up the first verification naming such
+a height paid that round trip on the verify path (live: verify p99 21 ms
+against a p50 of 0.66 ms). `-header-warm` loads the most recent heights first,
+in parallel, before the lanes and the read API open; readiness follows the
+lanes, so `/readyz` turns ready only after it. It never fails startup: a height
+not loaded in time, or not answered, is fetched on first use. Warmed roots are
+still the anchor's answers and are booked as `fallback` when read, exactly as
+before. 2016 heights is two weeks of mainnet blocks; a proof older than the
+warmed range costs one round trip on first use, then is cached.
 
 Re-anchoring resolves one parent per gap, not one per header. A root that came
 from the anchor is booked as `fallback` and reported `known: false`, so it

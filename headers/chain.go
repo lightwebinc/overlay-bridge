@@ -153,6 +153,9 @@ type Store struct {
 	// an in-process adapter that the engine never calls would read zero for
 	// the life of the process.
 	fromLane, fromFallback, misses uint64
+
+	// warm is the startup warm-up's progress (warm.go).
+	warm warmState
 }
 
 // fallbackCap bounds the fallback root cache. When it fills the cache is

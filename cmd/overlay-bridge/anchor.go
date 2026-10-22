@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -24,6 +25,7 @@ type anchorClient struct {
 	base    string
 	timeout time.Duration
 	http    *http.Client
+	once    sync.Once
 }
 
 var (
@@ -33,14 +35,23 @@ var (
 )
 
 func (a *anchorClient) client() *http.Client {
-	if a.http != nil {
-		return a.http
-	}
-	t := a.timeout
-	if t == 0 {
-		t = 5 * time.Second
-	}
-	return &http.Client{Timeout: t}
+	a.once.Do(func() {
+		if a.http != nil {
+			return
+		}
+		t := a.timeout
+		if t == 0 {
+			t = 5 * time.Second
+		}
+		// One client for the process, with an idle pool sized for the
+		// warm-up's concurrent reads. The default transport keeps two idle
+		// connections per host, so a parallel warm-up would open and close a
+		// connection per request.
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.MaxIdleConnsPerHost = 64
+		a.http = &http.Client{Timeout: t, Transport: tr}
+	})
+	return a.http
 }
 
 func (a *anchorClient) get(ctx context.Context, path string, out any) error {

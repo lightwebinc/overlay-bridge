@@ -34,6 +34,9 @@ type collector struct {
 	lanes   []*lanes.Lane
 	timings *timings
 	verify  bool
+	// config is the overlay_bridge_config_info label set, in descConfig's
+	// order; nil omits the series.
+	config []string
 }
 
 var (
@@ -75,13 +78,21 @@ var (
 		[]string{"kind"}, nil)
 	descLaneBound = prometheus.NewDesc("overlay_bridge_lane_bound",
 		"1 when a lane's listener is open.", []string{"lane"}, nil)
+	descWarm = prometheus.NewDesc("overlay_bridge_header_warm_heights",
+		"Startup header warm-up: heights it set out to load (target), loaded from the anchor (loaded) and not answered (failed; fetched on first use). loaded/target is its progress.",
+		[]string{"state"}, nil)
+	descWarmDuration = prometheus.NewDesc("overlay_bridge_header_warm_duration_seconds",
+		"Wall time of the startup header warm-up; 0 until it has finished or when it is off.", nil, nil)
+	descConfig = prometheus.NewDesc("overlay_bridge_config_info",
+		"Always 1. Labels carry the run settings a measurement must be stamped with (R7): verify mode, network and finality, engine workers, GOMAXPROCS, GOGC and GOMEMLIMIT.",
+		[]string{"verify", "verify_network", "verify_finality", "engine_workers", "gomaxprocs", "gogc", "gomemlimit"}, nil)
 )
 
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
 		descFeed, descSteak, descHeaders, descTip, descRoots, descFacade,
 		descQueue, descQueueDepth, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
-		descBuild, descVerifyScripts, descMismatch,
+		descBuild, descVerifyScripts, descMismatch, descWarm, descWarmDuration, descConfig,
 	} {
 		ch <- d
 	}
@@ -159,6 +170,9 @@ func buildLabels() (version, shardCommon, goSDK string) {
 func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	ver, sc, sdk := buildLabels()
 	gauge(ch, descBuild, 1, ver, sc, sdk, runtime.Version())
+	if c.config != nil {
+		gauge(ch, descConfig, 1, c.config...)
+	}
 
 	if c.feed != nil {
 		f := c.feed
@@ -225,6 +239,11 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descRoots, s.FromLane, "lane")
 		counter(ch, descRoots, s.FromFallback, "fallback")
 		counter(ch, descRoots, s.Misses, "miss")
+		w := c.store.WarmStats()
+		gauge(ch, descWarm, float64(w.Target), "target")
+		gauge(ch, descWarm, float64(w.Loaded), "loaded")
+		gauge(ch, descWarm, float64(w.Failed), "failed")
+		gauge(ch, descWarmDuration, w.Duration.Seconds())
 	}
 	if c.facade != nil {
 		s := c.facade.Stats()
@@ -280,7 +299,7 @@ func (c *collector) handler() http.Handler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(c)
 	if c.timings != nil {
-		reg.MustRegister(c.timings.verify, c.timings.submit)
+		reg.MustRegister(c.timings.collectors()...)
 	}
 	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 }
