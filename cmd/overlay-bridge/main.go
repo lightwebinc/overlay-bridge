@@ -45,6 +45,9 @@ type config struct {
 	subToken   string
 
 	engine        string
+	shadowEngine  string
+	shadowWorkers int
+	shadowQueue   int
 	engineTimeout time.Duration
 	engineWorkers int
 	engineQueue   int
@@ -91,6 +94,9 @@ func main() {
 	flag.StringVar(&c.subID, "subscription-consumer", "", "consumer id to reconcile -topics against")
 	flag.StringVar(&c.subToken, "subscription-token", "", "bearer token for the broker read; prefer OVERLAY_BRIDGE_SUBSCRIPTION_TOKEN")
 	flag.StringVar(&c.engine, "engine", "", "BRC-22 submit base, root-mounted, no /api/v1 prefix")
+	flag.StringVar(&c.shadowEngine, "shadow-engine", "", "a second BRC-22 submit base fed every object the primary is fed, asynchronously, and compared per topic; empty = off")
+	flag.IntVar(&c.shadowWorkers, "shadow-workers", 2, "concurrent shadow submits")
+	flag.IntVar(&c.shadowQueue, "shadow-queue", 1024, "objects queued for the shadow; a full queue drops, never blocks the primary")
 	flag.DurationVar(&c.engineTimeout, "engine-timeout", 30*time.Second, "per-submit ceiling")
 	flag.IntVar(&c.engineWorkers, "engine-workers", 4, "concurrent engine submits; the lane never waits on the engine")
 	flag.IntVar(&c.engineQueue, "engine-queue", 256, "deliveries queued behind the workers; a full queue sheds")
@@ -189,6 +195,17 @@ func run(c config, log *slog.Logger) error {
 		log.Info("bridge SPV verification", "mode", vmode, "network", network, "finality", c.verifyFinality, "marker", len(f.MarkerKey) > 0)
 	}
 
+	if c.shadowEngine != "" && submitter != nil {
+		f.Shadow = &feed.Shadow{
+			Submit:      &feed.Client{Base: c.shadowEngine, Timeout: c.engineTimeout, Log: log},
+			Workers:     c.shadowWorkers,
+			QueueDepth:  c.shadowQueue,
+			Log:         log,
+			OnSubmitted: tim.onShadow,
+		}
+		log.Info("shadow engine", "base", c.shadowEngine, "workers", c.shadowWorkers, "queue", c.shadowQueue)
+	}
+
 	// ---- up-tunnel and the facade.
 	var queue *uptunnel.Queue
 	if c.mode == "all" && c.edgeIngress != "" {
@@ -217,6 +234,9 @@ func run(c config, log *slog.Logger) error {
 		// Engine submits run off the lane's read loop, so an engine stall
 		// never holds the delivery socket past the edge's write deadline.
 		tasks.go_("engine-workers", f.Start)
+	}
+	if f.Shadow != nil {
+		tasks.go_("shadow-workers", f.Shadow.Start)
 	}
 
 	var fac *facade.Facade
@@ -348,6 +368,14 @@ func (c config) validate() error {
 		if strings.TrimSpace(c.topics) == "" {
 			return errors.New("-topics is required unless -mode sink: the bridge holds the only topic name map")
 		}
+		if strings.Contains(c.shadowEngine, "/api/v1") {
+			return errors.New("-shadow-engine is a bare origin: it carries no /api/v1 prefix")
+		}
+		if c.shadowEngine != "" && strings.TrimRight(c.shadowEngine, "/") == strings.TrimRight(c.engine, "/") {
+			return errors.New("-shadow-engine is the same origin as -engine: a shadow of itself compares nothing")
+		}
+	} else if c.shadowEngine != "" {
+		return errors.New("-shadow-engine needs an engine to shadow: -mode sink submits nowhere")
 	}
 	if _, err := feed.ParseVerifyMode(c.verifyMode); err != nil {
 		return fmt.Errorf("-verify: %w", err)

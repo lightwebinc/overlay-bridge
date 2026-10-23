@@ -26,6 +26,10 @@ func TestValidate(t *testing.T) {
 		// A facade with nowhere to publish would accept submissions, admit
 		// them locally and silently never put them on the plane.
 		{"facade with no ingress", func(c *config) { c.edgeIngress = "" }, "cannot publish"},
+		{"shadow carries a prefix", func(c *config) { c.shadowEngine = "http://host:8280/api/v1" }, "bare origin"},
+		{"shadow is the engine", func(c *config) { c.shadowEngine = "http://host:8080/" }, "same origin"},
+		{"shadow beside the engine", func(c *config) { c.shadowEngine = "http://host:8280" }, ""},
+		{"shadow in sink mode", func(c *config) { *c = config{mode: "sink", shadowEngine: "http://host:8280"} }, "submits nowhere"},
 		// Sink mode terminates and counts, so it needs none of it.
 		{"sink needs nothing", func(c *config) {
 			*c = config{mode: "sink"}

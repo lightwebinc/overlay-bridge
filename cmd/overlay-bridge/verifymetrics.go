@@ -25,6 +25,7 @@ var workBuckets = []float64{0, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 64, 128, 256}
 type timings struct {
 	verify *prometheus.HistogramVec
 	submit *prometheus.HistogramVec
+	shadow *prometheus.HistogramVec
 	// work is the R2 per-object work: one histogram per counter, observed
 	// once per verified object, so _sum/_count is the mean work per object
 	// and rate(_sum) is the work rate a CPU rate is divided by.
@@ -52,6 +53,11 @@ func newTimings() *timings {
 			Help:    "Lane arrival to the engine's answer, per topic submit: queueing, the bridge's verification and the engine's whole submit (its own verification included). outcome: admitted | empty | error | refused (engine 4xx) | engine_error (unreachable or 5xx after retries).",
 			Buckets: submitBuckets,
 		}, []string{"outcome"}),
+		shadow: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "overlay_bridge_shadow_submit_duration_seconds",
+			Help:    "One submit to the shadow engine (-shadow-engine), its whole submit included. result: ok (answered 200) | error (unreachable, refused or failed).",
+			Buckets: submitBuckets,
+		}, []string{"result"}),
 	}
 	t.work = make(map[string]prometheus.Histogram, len(workCounters))
 	for _, w := range workCounters {
@@ -67,7 +73,14 @@ func newTimings() *timings {
 	for _, o := range []string{feed.OutcomeAdmitted, feed.OutcomeEmpty, feed.OutcomeError, feed.OutcomeRefused, feed.OutcomeEngineError} {
 		t.submit.WithLabelValues(o)
 	}
+	for _, r := range []string{"ok", "error"} {
+		t.shadow.WithLabelValues(r)
+	}
 	return t
+}
+
+func (t *timings) onShadow(result string, d time.Duration) {
+	t.shadow.WithLabelValues(result).Observe(d.Seconds())
 }
 
 func (t *timings) onVerified(vd spv.Verdict) {
@@ -82,7 +95,7 @@ func (t *timings) onVerified(vd spv.Verdict) {
 
 // collectors lists every vector for registration.
 func (t *timings) collectors() []prometheus.Collector {
-	cs := []prometheus.Collector{t.verify, t.submit}
+	cs := []prometheus.Collector{t.verify, t.submit, t.shadow}
 	for _, w := range workCounters {
 		cs = append(cs, t.work[w.name])
 	}

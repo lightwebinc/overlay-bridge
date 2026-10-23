@@ -76,6 +76,9 @@ var (
 	descMismatch = prometheus.NewDesc("overlay_bridge_verify_mismatch_total",
 		"Shadow-mode disagreements between the bridge's SPV verdict and the engine's answer, by kind. bridge_ok_engine_refused must stay zero before enforce.",
 		[]string{"kind"}, nil)
+	descShadow = prometheus.NewDesc("overlay_bridge_shadow_total",
+		"Topic submits offered to the shadow engine, by comparison with the primary's answer: match | primary_only | shadow_only | differ | shadow_error (no answer to compare) | shadow_dropped (queue full; never offered). Present only with -shadow-engine.",
+		[]string{"kind"}, nil)
 	descLaneBound = prometheus.NewDesc("overlay_bridge_lane_bound",
 		"1 when a lane's listener is open.", []string{"lane"}, nil)
 	descWarm = prometheus.NewDesc("overlay_bridge_header_warm_heights",
@@ -92,7 +95,7 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
 		descFeed, descSteak, descHeaders, descTip, descRoots, descFacade,
 		descQueue, descQueueDepth, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
-		descBuild, descVerifyScripts, descMismatch, descWarm, descWarmDuration, descConfig,
+		descBuild, descVerifyScripts, descMismatch, descShadow, descWarm, descWarmDuration, descConfig,
 	} {
 		ch <- d
 	}
@@ -191,6 +194,14 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 			counter(ch, descVerifyScripts, s.VerifyScripts)
 			for _, k := range feed.MismatchKinds {
 				counter(ch, descMismatch, s.Mismatch[k], k)
+			}
+		}
+		if f.Shadow != nil {
+			// Preset every kind at zero: a shadow that has never matched
+			// must show a zero match series, not no series.
+			ss := f.Shadow.Stats()
+			for _, k := range feed.ShadowKinds {
+				counter(ch, descShadow, ss.Kinds[k], k)
 			}
 		}
 		// Preset every elected topic's outcomes at zero before emitting what

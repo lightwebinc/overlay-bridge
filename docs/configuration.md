@@ -45,6 +45,16 @@ Non-zero `shed` means the engine cannot keep up. An engine that answers 4xx
 refused the object on its merits; that is counted as `engine_refused` and is
 not retried.
 
+## Shadow engine
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `-shadow-engine` | (none) | a second submit base, a bare origin like `-engine` and not the same one, handed every object the primary is handed and compared per topic. See [the shadow engine](shadow.md) |
+| `-shadow-workers` | `2` | concurrent shadow submits |
+| `-shadow-queue` | `1024` | objects queued for the shadow. A full queue drops the offer (`shadow_dropped`); it never blocks the primary |
+
+The shadow uses `-engine-timeout` for its submits and makes no retries.
+
 ## SPV verification
 
 | Flag | Default | Notes |

@@ -107,6 +107,11 @@ type Feed struct {
 	OnVerified  func(spv.Verdict)
 	OnSubmitted func(outcome string, d time.Duration)
 
+	// Shadow, when set, is offered every topic submit once the primary has
+	// answered, with the primary's answer to compare against. It never
+	// delays or fails the primary submit.
+	Shadow *Shadow
+
 	c counters
 
 	qmu     sync.Mutex
@@ -350,6 +355,7 @@ func (f *Feed) submitOne(ctx context.Context, name string, object []byte, marker
 			f.c.add(&f.c.submitted)
 			f.c.addSteak(name, oc)
 			f.observeSubmit(oc, arrived)
+			f.Shadow.offer(name, object, marker, steak[name])
 			if attempt > 0 {
 				f.c.add(&f.c.retried)
 				if f.Log != nil {
@@ -361,6 +367,7 @@ func (f *Feed) submitOne(ctx context.Context, name string, object []byte, marker
 		if Refused(err) {
 			f.c.add(&f.c.engineRefused)
 			f.observeSubmit(OutcomeRefused, arrived)
+			f.Shadow.offer(name, object, marker, nil)
 			if f.Log != nil {
 				f.Log.Warn("feed: engine refused the object", "topic", name, "err", err)
 			}
@@ -377,6 +384,7 @@ func (f *Feed) submitOne(ctx context.Context, name string, object []byte, marker
 	}
 	f.c.add(&f.c.engineError)
 	f.observeSubmit(OutcomeEngineError, arrived)
+	f.Shadow.offer(name, object, marker, nil)
 	if f.Log != nil {
 		f.Log.Warn("feed: engine submit failed, object DROPPED",
 			"topic", name, "attempts", retries+1, "err", err)
