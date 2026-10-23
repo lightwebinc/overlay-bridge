@@ -147,10 +147,20 @@ it. That failure is silent, hence a startup check.
 | `-headers-listen` | `[::]:9178` | the chain-tracker read API |
 | `-metrics-addr` | `[::]:9179` | `/metrics`, `/healthz`, `/readyz`; empty disables it |
 | `-stats-every` | `1m` | interval of the stats log line; `0` is off |
+| `-pprof-listen` | (none) | a loopback `host:port` (`127.0.0.1`, `::1` or `localhost`) serving `net/http/pprof` under `/debug/pprof/`; empty is off |
 
 `-facade-listen` without `-edge-ingress` is refused: a facade with nowhere to
 publish would admit submissions locally and silently never put them on the
 plane. `/readyz` reports ready once every lane's listener is bound.
+
+`-pprof-listen` is refused on any non-loopback address: profiles carry code
+paths and memory contents and the endpoint has no authentication, so whatever
+collects them (a continuous profiler's agent, or `go tool pprof` over ssh)
+runs on the same machine. While it is set, block profiling records every
+blocking event of 10 us or more and a shorter one in proportion to its
+length, and mutex profiling records one contention event in 10: the
+low-overhead rates continuous profilers use. Unset, the runtime records
+neither. A listener that cannot open is logged and the bridge carries on.
 
 ## Loop guard
 

@@ -49,6 +49,14 @@ func TestValidate(t *testing.T) {
 			c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280,shadow=http://host:8080"}
 		}, ""},
 		{"shadow-facade with no shadow anywhere", func(c *config) { c.shadowFacade = true }, "needs a shadow"},
+		// pprof listens on loopback only: profiles carry code paths and
+		// memory, and the endpoint has no authentication.
+		{"pprof on loopback", func(c *config) { c.pprofListen = "127.0.0.1:6061" }, ""},
+		{"pprof on loopback v6", func(c *config) { c.pprofListen = "[::1]:6061" }, ""},
+		{"pprof on localhost", func(c *config) { c.pprofListen = "localhost:6061" }, ""},
+		{"pprof on every address", func(c *config) { c.pprofListen = ":6061" }, "loopback"},
+		{"pprof on a LAN address", func(c *config) { c.pprofListen = "192.0.2.1:6061" }, "loopback"},
+		{"pprof without a port", func(c *config) { c.pprofListen = "127.0.0.1" }, "host:port"},
 		// Sink mode terminates and counts, so it needs none of it.
 		{"sink needs nothing", func(c *config) {
 			*c = config{mode: "sink"}

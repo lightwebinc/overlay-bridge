@@ -1,6 +1,9 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/lightwebinc/overlay-bridge/feed"
@@ -83,6 +86,39 @@ func TestSteakOutcomesArePresetAtZero(t *testing.T) {
 	for _, oc := range []string{"admitted", "empty", "error"} {
 		if !got["tm_lab_a/"+oc] {
 			t.Errorf("tm_lab_a/%s is absent; an absent series makes the alert that reads it match nothing", oc)
+		}
+	}
+}
+
+// TestLoadSeriesArePresetAtZero: the queue, worker and shed series exist for
+// every route and stage before anything has happened, so a panel or rule
+// reading them sees zero on an idle bridge rather than no series.
+func TestLoadSeriesArePresetAtZero(t *testing.T) {
+	f := &feed.Feed{
+		Topics:     feed.NewTopicMap([]string{"tm_app_a", "tm_lab_a"}),
+		Submit:     &feed.Client{Base: "http://127.0.0.1:1"},
+		Workers:    4,
+		QueueDepth: 32,
+		Routes:     []*feed.Route{{Pattern: "tm_app_*", Submit: &feed.Client{Base: "http://127.0.0.1:2"}, Shadow: &feed.Shadow{Name: "tm_app_*", QueueDepth: 8}}},
+	}
+	rec := httptest.NewRecorder()
+	(&collector{feed: f, timings: newTimings()}).handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		"overlay_bridge_engine_queue_depth 0",
+		"overlay_bridge_engine_queue_capacity 32",
+		"overlay_bridge_engine_workers 4",
+		`overlay_bridge_engine_workers_busy{route="default",stage="submit"} 0`,
+		`overlay_bridge_engine_workers_busy{route="default",stage="verify"} 0`,
+		`overlay_bridge_engine_workers_busy{route="tm_app_*",stage="submit"} 0`,
+		`overlay_bridge_feed_shed_total{route="default"} 0`,
+		`overlay_bridge_feed_shed_total{route="tm_app_*"} 0`,
+		`overlay_bridge_shadow_queue_depth{route="tm_app_*"} 0`,
+		`overlay_bridge_shadow_queue_capacity{route="tm_app_*"} 8`,
+		"overlay_bridge_engine_queue_wait_seconds_count 0",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics lacks %q", want)
 		}
 	}
 }

@@ -16,6 +16,10 @@ var verifyBuckets = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.0
 // an idle host up to the submit timeout.
 var submitBuckets = []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
 
+// waitBuckets cover the engine queue wait: microseconds when a worker is
+// free, up to the seconds a full queue takes to drain behind a slow engine.
+var waitBuckets = []float64{0.00001, 0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
+
 // workBuckets cover per-object work counts (R2): a simple object is 1-2, a
 // deep or wide one tens, and a pathological one hundreds.
 var workBuckets = []float64{0, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 64, 128, 256}
@@ -26,6 +30,8 @@ type timings struct {
 	verify *prometheus.HistogramVec
 	submit *prometheus.HistogramVec
 	shadow *prometheus.HistogramVec
+	// wait is lane arrival to a worker taking the object off the queue.
+	wait prometheus.Histogram
 	// work is the R2 per-object work: one histogram per counter, observed
 	// once per verified object, so _sum/_count is the mean work per object
 	// and rate(_sum) is the work rate a CPU rate is divided by.
@@ -58,6 +64,11 @@ func newTimings() *timings {
 			Help:    "One submit to a shadow engine, its whole submit included, by route (default = -shadow-engine, else the -engine-route glob). result: ok (answered 200) | error (unreachable, refused or failed).",
 			Buckets: submitBuckets,
 		}, []string{"route", "result"}),
+		wait: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "overlay_bridge_engine_queue_wait_seconds",
+			Help:    "Lane arrival to an engine worker taking the object off the queue: the time a delivery waited for a free worker. Its growth ahead of overlay_bridge_feed_shed_total is the queue filling.",
+			Buckets: waitBuckets,
+		}),
 	}
 	t.work = make(map[string]prometheus.Histogram, len(workCounters))
 	for _, w := range workCounters {
@@ -98,7 +109,7 @@ func (t *timings) onVerified(vd spv.Verdict) {
 
 // collectors lists every vector for registration.
 func (t *timings) collectors() []prometheus.Collector {
-	cs := []prometheus.Collector{t.verify, t.submit, t.shadow}
+	cs := []prometheus.Collector{t.verify, t.submit, t.shadow, t.wait}
 	for _, w := range workCounters {
 		cs = append(cs, t.work[w.name])
 	}
@@ -107,4 +118,8 @@ func (t *timings) collectors() []prometheus.Collector {
 
 func (t *timings) onSubmitted(outcome string, d time.Duration) {
 	t.submit.WithLabelValues(outcome).Observe(d.Seconds())
+}
+
+func (t *timings) onDequeued(wait time.Duration) {
+	t.wait.Observe(wait.Seconds())
 }

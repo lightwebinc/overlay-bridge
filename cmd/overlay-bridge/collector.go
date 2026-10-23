@@ -86,6 +86,23 @@ var (
 		[]string{"state"}, nil)
 	descWarmDuration = prometheus.NewDesc("overlay_bridge_header_warm_duration_seconds",
 		"Wall time of the startup header warm-up; 0 until it has finished or when it is off.", nil, nil)
+	descEngineQueue = prometheus.NewDesc("overlay_bridge_engine_queue_depth",
+		"Deliveries queued behind the engine workers right now. At overlay_bridge_engine_queue_capacity the next delivery is shed.", nil, nil)
+	descEngineQueueCap = prometheus.NewDesc("overlay_bridge_engine_queue_capacity",
+		"Size of the engine queue (-engine-queue).", nil, nil)
+	descWorkers = prometheus.NewDesc("overlay_bridge_engine_workers",
+		"Engine workers configured (-engine-workers).", nil, nil)
+	descWorkersBusy = prometheus.NewDesc("overlay_bridge_engine_workers_busy",
+		"Engine workers busy right now, by route (default = -engine, else the -engine-route glob) and stage: verify (the bridge's SPV, counted under the route of the topic the object was delivered under) | submit (waiting on that route's engine, retries and backoff included). Workers minus the sum is idle.",
+		[]string{"route", "stage"}, nil)
+	descShedRoute = prometheus.NewDesc("overlay_bridge_feed_shed_total",
+		"Deliveries shed because the engine queue was full, by the route of the topic the plane delivered them under. Sums to overlay_bridge_feed_total{outcome=\"shed\"}.",
+		[]string{"route"}, nil)
+	descShadowQueue = prometheus.NewDesc("overlay_bridge_shadow_queue_depth",
+		"Topic submits queued for a shadow engine right now, by route. At overlay_bridge_shadow_queue_capacity the next offer is dropped (shadow_dropped).",
+		[]string{"route"}, nil)
+	descShadowQueueCap = prometheus.NewDesc("overlay_bridge_shadow_queue_capacity",
+		"Size of a shadow engine's queue (-shadow-queue), by route.", []string{"route"}, nil)
 	descConfig = prometheus.NewDesc("overlay_bridge_config_info",
 		"Always 1. Labels carry the run settings a measurement must be stamped with (R7): verify mode, network and finality, engine workers, GOMAXPROCS, GOGC and GOMEMLIMIT.",
 		[]string{"verify", "verify_network", "verify_finality", "engine_workers", "gomaxprocs", "gogc", "gomemlimit"}, nil)
@@ -96,6 +113,7 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 		descFeed, descSteak, descHeaders, descTip, descRoots, descFacade,
 		descQueue, descQueueDepth, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
 		descBuild, descVerifyScripts, descMismatch, descShadow, descWarm, descWarmDuration, descConfig,
+		descEngineQueue, descEngineQueueCap, descWorkers, descWorkersBusy, descShedRoute, descShadowQueue, descShadowQueueCap,
 	} {
 		ch <- d
 	}
@@ -202,6 +220,25 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 			ss := sh.Stats()
 			for _, k := range feed.ShadowKinds {
 				counter(ch, descShadow, ss.Kinds[k], sh.Name, k)
+			}
+			queued, capacity := sh.Backlog()
+			gauge(ch, descShadowQueue, float64(queued), sh.Name)
+			gauge(ch, descShadowQueueCap, float64(capacity), sh.Name)
+		}
+		if f.Submit != nil {
+			// Where the workers' time goes: the queue in front of them, and
+			// how many are verifying or waiting on each route's engine.
+			// Every route and stage is preset at zero.
+			queued, capacity := f.Backlog()
+			gauge(ch, descEngineQueue, float64(queued))
+			gauge(ch, descEngineQueueCap, float64(capacity))
+			gauge(ch, descWorkers, float64(f.Workers))
+			busy := f.Busy()
+			for _, route := range f.RouteNames() {
+				for _, stage := range feed.WorkerStages {
+					gauge(ch, descWorkersBusy, float64(busy[feed.BusyKey{Route: route, Stage: stage}]), route, stage)
+				}
+				counter(ch, descShedRoute, s.ShedByRoute[route], route)
 			}
 		}
 		// Preset every elected topic's outcomes at zero before emitting what

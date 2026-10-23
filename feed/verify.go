@@ -70,7 +70,9 @@ func (f *Feed) process(ctx context.Context, j job) error {
 	)
 	verified := f.Verify != nil && f.VerifyMode != "" && f.VerifyMode != VerifyOff
 	if verified {
+		done := f.busy.enter(f.routeName(j.names[0]), StageVerify)
 		vd = f.Verify.Verify(ctx, j.object)
+		done()
 		f.c.addN(&f.c.verifyScripts, uint64(vd.Scripts))
 		if f.OnVerified != nil {
 			f.OnVerified(vd)

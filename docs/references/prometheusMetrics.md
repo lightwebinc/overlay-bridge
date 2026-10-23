@@ -19,6 +19,11 @@ are exported. All values are read from component counters at scrape time.
 | `/healthz` | Liveness |
 | `/readyz` | Ready once every lane's listener is bound |
 
+With `-pprof-listen` set, `net/http/pprof` is served on that loopback address
+(not on `-metrics-addr`): `/debug/pprof/profile?seconds=N` (CPU), `allocs`,
+`heap`, `goroutine`, `block`, `mutex`, `threadcreate`, `trace`. See
+[configuration](../configuration.md#listeners).
+
 ## Metrics
 
 | Name | Type | Labels | Meaning |
@@ -30,8 +35,16 @@ are exported. All values are read from component counters at scrape time.
 | `overlay_bridge_verify_object_txs`, `_inputs`, `_scripts`, `_proofs`, `_ancestor_depth` | Histogram | none | Per-object work (R2), observed once per verified object: transactions, inputs across all of them, input scripts run, transactions carrying a merkle path, and the longest chain of in-object parents (1 = child of a proven parent). `_sum / _count` is the mean per object; divide a CPU rate by `rate(..._count)` for CPU per object, or by `rate(..._scripts_sum)` for CPU per script |
 | `overlay_bridge_verify_mismatch_total` | Counter | `kind` = `bridge_ok_engine_refused`, `bridge_refused_engine_ok` | Shadow-mode disagreements with the engine. `bridge_ok_engine_refused` must be zero before enforce |
 | `overlay_bridge_engine_submit_duration_seconds` | Histogram | `outcome` = `admitted`, `empty`, `error`, `refused`, `engine_error` | Lane arrival to the engine's answer, per topic submit |
-| `overlay_bridge_shadow_total` | Counter | `kind` = `match`, `primary_only`, `shadow_only`, `differ`, `shadow_error`, `shadow_dropped` | Topic submits offered to the shadow engine, by comparison with the primary's answer. Preset at zero. Present only with `-shadow-engine`. See [the shadow engine](../shadow.md) |
-| `overlay_bridge_shadow_submit_duration_seconds` | Histogram | `result` = `ok`, `error` | One submit to the shadow engine |
+| `overlay_bridge_shadow_total` | Counter | `route` (`default` = `-shadow-engine`, else the `-engine-route` glob); `kind` = `match`, `primary_only`, `shadow_only`, `differ`, `shadow_error`, `shadow_dropped` | Topic submits offered to a shadow engine, by comparison with the primary's answer. Preset at zero. Present only with a shadow configured. See [the shadow engine](../shadow.md) |
+| `overlay_bridge_shadow_submit_duration_seconds` | Histogram | `route`; `result` = `ok`, `error` | One submit to a shadow engine |
+| `overlay_bridge_shadow_queue_depth` | Gauge | `route` | Topic submits queued for a shadow engine right now. At `overlay_bridge_shadow_queue_capacity` the next offer is dropped (`shadow_dropped`) |
+| `overlay_bridge_shadow_queue_capacity` | Gauge | `route` | Size of a shadow's queue (`-shadow-queue`) |
+| `overlay_bridge_engine_queue_depth` | Gauge | none | Deliveries queued behind the engine workers right now. At `overlay_bridge_engine_queue_capacity` the next delivery is shed |
+| `overlay_bridge_engine_queue_capacity` | Gauge | none | Size of the engine queue (`-engine-queue`) |
+| `overlay_bridge_engine_queue_wait_seconds` | Histogram | none | Lane arrival to a worker taking the object off the queue: how long a delivery waited for a free worker. Buckets 10 us to 30 s |
+| `overlay_bridge_engine_workers` | Gauge | none | Engine workers configured (`-engine-workers`) |
+| `overlay_bridge_engine_workers_busy` | Gauge | `route` (`default` = `-engine`, else the `-engine-route` glob); `stage` = `verify`, `submit` | Workers busy right now: running the bridge's SPV (`verify`, under the route of the topic the object was delivered under) or waiting on that route's engine (`submit`, retries and backoff included). `overlay_bridge_engine_workers` minus the sum is idle. Preset at zero for every route and stage |
+| `overlay_bridge_feed_shed_total` | Counter | `route` | Deliveries shed because the engine queue was full, by the route of the topic the plane delivered them under. Sums to `overlay_bridge_feed_total{outcome="shed"}`. Preset at zero |
 | `overlay_bridge_engine_submits_total` | Counter | `topic`, `outcome` = `admitted`, `empty`, `error` | Engine submits by topic and admittance outcome. Preset at zero for every elected topic. |
 | `overlay_bridge_headers_total` | Counter | `outcome` = `observed`, `rejected`, `orphaned`, `reanchored`, `replaced`, `pruned` | Headers seen on the header lane. |
 | `overlay_bridge_header_tip_height` | Gauge | none | Best chained block height. Flat with a live lane is the outage signature. |
@@ -57,5 +70,9 @@ components (`-mode sink` emits lane and build series only).
 - `overlay_bridge_feed_total{outcome="unknown_topic"}` rising: a subscription and
   this bridge's `-topics` have drifted apart.
 - `overlay_bridge_feed_total{outcome="shed"}` rising: the engine cannot keep up.
+  `overlay_bridge_feed_shed_total{route}` says which engine, and
+  `overlay_bridge_engine_workers_busy{stage="submit"}` at the worker count with
+  `overlay_bridge_engine_queue_depth` at its capacity is the signature: every
+  worker waiting on an engine and nothing left to queue into.
 - `overlay_bridge_tracker_roots_total{source="lane"}` versus `{source="fallback"}`
   shows whether verification is sovereign or anchored on a third party.

@@ -106,6 +106,10 @@ type Feed struct {
 	// on a worker and must not block.
 	OnVerified  func(spv.Verdict)
 	OnSubmitted func(outcome string, d time.Duration)
+	// OnDequeued is told, when a worker takes an object off the queue, how
+	// long it waited there since it arrived on the lane. It runs on the
+	// worker and must not block.
+	OnDequeued func(wait time.Duration)
 
 	// Shadow, when set, is offered every topic submit once the primary has
 	// answered, with the primary's answer to compare against. It never
@@ -116,7 +120,8 @@ type Feed struct {
 	// Shadow. See Route.
 	Routes []*Route
 
-	c counters
+	c    counters
+	busy busyCount
 
 	qmu     sync.Mutex
 	q       chan job
@@ -167,6 +172,9 @@ func (f *Feed) Start(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case j := <-q:
+					if f.OnDequeued != nil && !j.arrived.IsZero() {
+						f.OnDequeued(time.Since(j.arrived))
+					}
 					_ = f.process(ctx, j)
 				}
 			}
@@ -291,7 +299,7 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		if !f.started.Load() {
 			// Loud rather than silent: a queue nobody drains would fill and
 			// shed as if the engine were slow, which is the wrong diagnosis.
-			f.c.add(&f.c.shed)
+			f.c.addShed(f.routeName(name))
 			return fmt.Errorf("%w: workers not started", ErrShed)
 		}
 		q := f.queue()
@@ -299,7 +307,7 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		case q <- job{names: names, object: owned, arrived: arrived}:
 			return nil
 		default:
-			f.c.add(&f.c.shed)
+			f.c.addShed(f.routeName(name))
 			f.logReject("engine queue full, delivery shed", topicID, "bytes", len(owned), "depth", cap(q))
 			return ErrShed
 		}
@@ -344,6 +352,7 @@ func (f *Feed) submitBackoff() time.Duration {
 //
 // marker, when not empty, is the SPV trust marker for this object.
 func (f *Feed) submitOne(ctx context.Context, name string, object []byte, marker string, arrived time.Time) error {
+	defer f.busy.enter(f.routeName(name), StageSubmit)()
 	retries := f.submitRetries()
 	backoff := f.submitBackoff()
 	engine, shadow := f.enginesFor(name)

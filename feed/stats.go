@@ -54,6 +54,9 @@ type Stats struct {
 	// engine cannot keep up with delivery and the host is relying on its own
 	// catch-up to close the gap.
 	Shed uint64
+	// ShedByRoute splits Shed by the route of the topic the plane delivered
+	// each object under (DefaultRoute or a route's pattern).
+	ShedByRoute map[string]uint64
 	// EngineRefused counts submits the engine answered 4xx: refused on the
 	// object's merits, never retried.
 	EngineRefused uint64
@@ -73,6 +76,18 @@ type counters struct {
 	engineRefused, spvRefused, verifyScripts                                        uint64
 	mismatch                                                                        map[string]uint64
 	steak                                                                           map[SteakKey]uint64
+	shedRoute                                                                       map[string]uint64
+}
+
+// addShed counts one shed delivery, in total and under its route.
+func (c *counters) addShed(route string) {
+	c.mu.Lock()
+	c.shed++
+	if c.shedRoute == nil {
+		c.shedRoute = make(map[string]uint64)
+	}
+	c.shedRoute[route]++
+	c.mu.Unlock()
 }
 
 func (c *counters) addN(field *uint64, n uint64) {
@@ -122,6 +137,10 @@ func (c *counters) snapshot() Stats {
 		VerifyScripts: c.verifyScripts,
 		Mismatch:      make(map[string]uint64, len(c.mismatch)),
 		Steak:         make(map[SteakKey]uint64, len(c.steak)),
+		ShedByRoute:   make(map[string]uint64, len(c.shedRoute)),
+	}
+	for k, v := range c.shedRoute {
+		s.ShedByRoute[k] = v
 	}
 	for k, v := range c.mismatch {
 		s.Mismatch[k] = v

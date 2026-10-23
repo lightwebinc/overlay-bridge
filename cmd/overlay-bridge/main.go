@@ -78,6 +78,7 @@ type config struct {
 
 	metricsAddr string
 	statsEvery  time.Duration
+	pprofListen string
 
 	verifyMode      string
 	verifyNetwork   string
@@ -124,6 +125,7 @@ func main() {
 	flag.IntVar(&c.guardEntries, "guard-entries", 1<<20, "loop-guard ceiling")
 	flag.StringVar(&c.metricsAddr, "metrics-addr", "[::]:9179", "/metrics, /healthz, /readyz; empty = off")
 	flag.DurationVar(&c.statsEvery, "stats-every", time.Minute, "stats line interval; 0 = off")
+	flag.StringVar(&c.pprofListen, "pprof-listen", "", "loopback host:port serving net/http/pprof, with block and mutex profiling at low rates; empty = off")
 	flag.StringVar(&c.verifyMode, "verify", "off", "bridge-side SPV of delivered objects: off | shadow (verify and compare, submit as before) | enforce (drop refused objects, mark passing ones)")
 	flag.StringVar(&c.verifyNetwork, "verify-network", "main", "activation heights scripts are judged under: main | test | all (every rule from block 0; regtest-style chains)")
 	flag.StringVar(&c.verifyFinality, "verify-finality", "ignore", "finality policy for unmined transactions: ignore (the overlay plane: committed-record carriers are non-final by design) | require (bitcoin-sv's rule)")
@@ -184,6 +186,7 @@ func run(c config, log *slog.Logger) error {
 		VerifyMode:    vmode,
 		OnVerified:    tim.onVerified,
 		OnSubmitted:   tim.onSubmitted,
+		OnDequeued:    tim.onDequeued,
 	}
 	if vmode != feed.VerifyOff {
 		network, _ := spv.ParseNetwork(c.verifyNetwork)    // validated above
@@ -328,6 +331,10 @@ func run(c config, log *slog.Logger) error {
 		})
 	}
 
+	if c.pprofListen != "" {
+		tasks.go_("pprof", func(ctx context.Context) error { return servePprof(ctx, c.pprofListen, log) })
+	}
+
 	if c.statsEvery > 0 {
 		tasks.go_("stats", func(ctx context.Context) error {
 			t := time.NewTicker(c.statsEvery)
@@ -424,6 +431,11 @@ func (c config) validate() error {
 	}
 	if c.verifyMode == string(feed.VerifyEnforce) && c.verifyMarkerKey == "" {
 		return errors.New("-verify enforce needs -verify-marker-key: without the marker the engine verifies every object again and enforce only adds a second verification")
+	}
+	if c.pprofListen != "" {
+		if err := loopbackAddr(c.pprofListen); err != nil {
+			return err
+		}
 	}
 	if c.mode == "all" && c.facadeListen != "" && c.edgeIngress == "" {
 		return errors.New("-facade-listen is set but -edge-ingress is empty: the facade would admit submissions it cannot publish")
