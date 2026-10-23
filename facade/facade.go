@@ -64,6 +64,19 @@ type Config struct {
 	// MaxObject bounds a submitted object. Zero takes the codec default.
 	MaxObject int
 	Log       *slog.Logger
+	// Routes send the topics each pattern names to an engine of their own,
+	// as the feed's routes do; every other topic goes to Engine.
+	Routes []*feed.Route
+	// Shadow is the default shadow (the feed's), offered a submission only
+	// when ShadowFacade is set; a routed topic's shadow is its route's.
+	Shadow *feed.Shadow
+	// ShadowFacade offers each accepted submission to the topic's shadow
+	// once the local engine has answered, with that answer to compare
+	// against, so a host that publishes through its own facade counts
+	// parity on what it publishes and not only on what the lane delivers.
+	// A submission the engine failed is not offered: there is no answer to
+	// compare, and the client's retry brings the object again.
+	ShadowFacade bool
 }
 
 // Facade is the submit server.
@@ -183,7 +196,8 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 		// Forward either way. A repeat is harmless: the host dedups it and
 		// answers with an empty admittance, which is what the client would
 		// have got by submitting to the host directly.
-		answer, err := f.cfg.Engine.SubmitDetail(ctx, name, object)
+		engine, shadow := f.enginesFor(name)
+		answer, err := engine.SubmitDetail(ctx, name, object)
 		if err != nil {
 			f.bump(&f.engineError)
 			f.logf("facade: engine submit failed", "topic", name, "err", err)
@@ -198,6 +212,11 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, ok := steak[name]; !ok {
 			steak[name] = &overlay.AdmittanceInstructions{}
+		}
+		if f.cfg.ShadowFacade {
+			// Never blocks, never fails: a non-blocking put on the shadow's
+			// own queue, as the feed's offer is.
+			shadow.Offer(name, object, "", answer.Steak[name])
 		}
 
 		if known {
@@ -252,6 +271,28 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 
 	f.bump(&f.ok)
 	writeSteak(w, steak, wrapped)
+}
+
+// enginesFor picks the engine and the shadow for a topic: its route's, or
+// the facade's own. A route whose engine does not report the answer's
+// wrapper form is relayed bare.
+func (f *Facade) enginesFor(topic string) (feed.DetailSubmitter, *feed.Shadow) {
+	r := feed.RouteFor(f.cfg.Routes, topic)
+	if r == nil || r.Submit == nil {
+		return f.cfg.Engine, f.cfg.Shadow
+	}
+	if ds, ok := r.Submit.(feed.DetailSubmitter); ok {
+		return ds, r.Shadow
+	}
+	return bareDetail{r.Submit}, r.Shadow
+}
+
+// bareDetail adapts a plain Submitter to DetailSubmitter, answering bare.
+type bareDetail struct{ feed.Submitter }
+
+func (b bareDetail) SubmitDetail(ctx context.Context, topic string, object []byte) (feed.Answer, error) {
+	steak, err := b.Submit(ctx, topic, object)
+	return feed.Answer{Steak: steak}, err
 }
 
 // writeSteak re-emits the answer in the same shape the host used.

@@ -52,8 +52,23 @@ not retried.
 | `-shadow-engine` | (none) | a second submit base, a bare origin like `-engine` and not the same one, handed every object the primary is handed and compared per topic. See [the shadow engine](shadow.md) |
 | `-shadow-workers` | `2` | concurrent shadow submits |
 | `-shadow-queue` | `1024` | objects queued for the shadow. A full queue drops the offer (`shadow_dropped`); it never blocks the primary |
+| `-shadow-facade` | off | also offer the facade's accepted submissions to the topic's shadow, with the local engine's answer to compare against, so a host that publishes through its own facade counts parity on what it publishes. A submission the engine failed is not offered |
 
 The shadow uses `-engine-timeout` for its submits and makes no retries.
+
+## Engine routes
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `-engine-route` | (none) | `GLOB=PRIMARY[,shadow=SHADOW]`: the topics the glob names submit to `PRIMARY`, with `SHADOW` as their shadow, instead of `-engine` and `-shadow-engine`. Repeatable; the first matching route wins. Both are bare origins like `-engine`, and the shadow may not be the primary. See [routes](shadow.md#routes) |
+
+A route moves one application's topics to another engine while every other
+topic stays where it is: the shape of a per-application cutover, with the
+engine being replaced shadowing its replacement on those topics. A route
+with no `shadow=` has no shadow for its topics (the default shadow is not
+offered them). Each route's shadow has its own queue and workers, sized by
+`-shadow-workers` and `-shadow-queue`, and its own `route` label on the
+shadow metrics. The feed and the facade route alike.
 
 ## SPV verification
 

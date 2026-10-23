@@ -48,6 +48,8 @@ type config struct {
 	shadowEngine  string
 	shadowWorkers int
 	shadowQueue   int
+	shadowFacade  bool
+	engineRoutes  routeFlags
 	engineTimeout time.Duration
 	engineWorkers int
 	engineQueue   int
@@ -97,6 +99,8 @@ func main() {
 	flag.StringVar(&c.shadowEngine, "shadow-engine", "", "a second BRC-22 submit base fed every object the primary is fed, asynchronously, and compared per topic; empty = off")
 	flag.IntVar(&c.shadowWorkers, "shadow-workers", 2, "concurrent shadow submits")
 	flag.IntVar(&c.shadowQueue, "shadow-queue", 1024, "objects queued for the shadow; a full queue drops, never blocks the primary")
+	flag.BoolVar(&c.shadowFacade, "shadow-facade", false, "also offer the facade's accepted submissions to the topic's shadow, so the publishing host counts parity on what it publishes")
+	flag.Var(&c.engineRoutes, "engine-route", "GLOB=PRIMARY[,shadow=SHADOW]: the topics GLOB names submit to PRIMARY (a bare origin) with SHADOW as their shadow, instead of -engine and -shadow-engine; repeatable, first match wins")
 	flag.DurationVar(&c.engineTimeout, "engine-timeout", 30*time.Second, "per-submit ceiling")
 	flag.IntVar(&c.engineWorkers, "engine-workers", 4, "concurrent engine submits; the lane never waits on the engine")
 	flag.IntVar(&c.engineQueue, "engine-queue", 256, "deliveries queued behind the workers; a full queue sheds")
@@ -195,15 +199,36 @@ func run(c config, log *slog.Logger) error {
 		log.Info("bridge SPV verification", "mode", vmode, "network", network, "finality", c.verifyFinality, "marker", len(f.MarkerKey) > 0)
 	}
 
-	if c.shadowEngine != "" && submitter != nil {
-		f.Shadow = &feed.Shadow{
-			Submit:      &feed.Client{Base: c.shadowEngine, Timeout: c.engineTimeout, Log: log},
+	newShadow := func(base, name string) *feed.Shadow {
+		return &feed.Shadow{
+			Submit:      &feed.Client{Base: base, Timeout: c.engineTimeout, Log: log},
 			Workers:     c.shadowWorkers,
 			QueueDepth:  c.shadowQueue,
 			Log:         log,
-			OnSubmitted: tim.onShadow,
+			Name:        name,
+			OnSubmitted: tim.onShadow(name),
 		}
+	}
+	if c.shadowEngine != "" && submitter != nil {
+		f.Shadow = newShadow(c.shadowEngine, feed.DefaultRoute)
 		log.Info("shadow engine", "base", c.shadowEngine, "workers", c.shadowWorkers, "queue", c.shadowQueue)
+	}
+	if submitter != nil {
+		for _, rs := range c.engineRoutes {
+			pattern, primary, shadow, _ := feed.ParseRoute(rs) // validated above
+			r := &feed.Route{
+				Pattern: pattern,
+				Submit:  &feed.Client{Base: primary, Timeout: c.engineTimeout, Log: log},
+			}
+			if shadow != "" {
+				r.Shadow = newShadow(shadow, pattern)
+			}
+			f.Routes = append(f.Routes, r)
+			log.Info("engine route", "topics", pattern, "primary", primary, "shadow", shadow)
+		}
+	}
+	if c.shadowFacade {
+		log.Info("facade submissions offered to the shadow")
 	}
 
 	// ---- up-tunnel and the facade.
@@ -235,8 +260,8 @@ func run(c config, log *slog.Logger) error {
 		// never holds the delivery socket past the edge's write deadline.
 		tasks.go_("engine-workers", f.Start)
 	}
-	if f.Shadow != nil {
-		tasks.go_("shadow-workers", f.Shadow.Start)
+	for _, sh := range shadows(f) {
+		tasks.go_("shadow-workers:"+sh.Name, sh.Start)
 	}
 
 	var fac *facade.Facade
@@ -252,6 +277,7 @@ func run(c config, log *slog.Logger) error {
 		fac = facade.New(facade.Config{
 			Engine: submitter, Publish: pub, Guard: g,
 			Topics: topicSet, MaxObject: c.maxObject, Log: log,
+			Routes: f.Routes, Shadow: f.Shadow, ShadowFacade: c.shadowFacade,
 		})
 		addr := firstAddr(c.facadeListen)
 		tasks.go_("facade", func(ctx context.Context) error { return fac.Serve(ctx, addr) })
@@ -374,8 +400,18 @@ func (c config) validate() error {
 		if c.shadowEngine != "" && strings.TrimRight(c.shadowEngine, "/") == strings.TrimRight(c.engine, "/") {
 			return errors.New("-shadow-engine is the same origin as -engine: a shadow of itself compares nothing")
 		}
+		for _, rs := range c.engineRoutes {
+			if _, _, _, err := feed.ParseRoute(rs); err != nil {
+				return fmt.Errorf("-engine-route: %w", err)
+			}
+		}
 	} else if c.shadowEngine != "" {
 		return errors.New("-shadow-engine needs an engine to shadow: -mode sink submits nowhere")
+	} else if len(c.engineRoutes) > 0 {
+		return errors.New("-engine-route needs an engine to route from: -mode sink submits nowhere")
+	}
+	if c.shadowFacade && c.shadowEngine == "" && !c.engineRoutes.anyShadow() {
+		return errors.New("-shadow-facade needs a shadow to offer to: set -shadow-engine or a route with shadow=")
 	}
 	if _, err := feed.ParseVerifyMode(c.verifyMode); err != nil {
 		return fmt.Errorf("-verify: %w", err)
@@ -489,6 +525,40 @@ func ingressAddrs(list string, port int) []string {
 			continue
 		}
 		out = append(out, net.JoinHostPort(strings.Trim(h, "[]"), fmt.Sprint(port)))
+	}
+	return out
+}
+
+// routeFlags collects every -engine-route value in order.
+type routeFlags []string
+
+func (r *routeFlags) String() string { return strings.Join(*r, " ") }
+func (r *routeFlags) Set(v string) error {
+	*r = append(*r, v)
+	return nil
+}
+
+// anyShadow reports whether some route names a shadow (parse errors read
+// as no shadow; validate reports them).
+func (r routeFlags) anyShadow() bool {
+	for _, rs := range r {
+		if _, _, shadow, err := feed.ParseRoute(rs); err == nil && shadow != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// shadows lists every shadow the feed runs: the default, then each route's.
+func shadows(f *feed.Feed) []*feed.Shadow {
+	var out []*feed.Shadow
+	if f.Shadow != nil {
+		out = append(out, f.Shadow)
+	}
+	for _, r := range f.Routes {
+		if r.Shadow != nil {
+			out = append(out, r.Shadow)
+		}
 	}
 	return out
 }

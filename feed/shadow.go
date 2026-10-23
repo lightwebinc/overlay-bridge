@@ -46,6 +46,9 @@ type Shadow struct {
 	// OnSubmitted is told each shadow submit's result (ok or error) and
 	// its duration. It runs on a worker and must not block.
 	OnSubmitted func(result string, d time.Duration)
+	// Name labels this shadow in logs: the route it belongs to, or
+	// DefaultRoute. Metrics carry it as the route label.
+	Name string
 
 	c       shadowCounters
 	qmu     sync.Mutex
@@ -168,8 +171,11 @@ func (s *Shadow) Start(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// offer queues one topic submit for the shadow. It never blocks.
-func (s *Shadow) offer(topic string, object []byte, marker string, primary *overlay.AdmittanceInstructions) {
+// Offer queues one topic submit for the shadow: the object, the topic, the
+// SPV marker the primary was handed (empty for none) and the primary's
+// answer for the topic (nil when it gave none). It never blocks, and a nil
+// Shadow accepts the call and does nothing, so callers need no guard.
+func (s *Shadow) Offer(topic string, object []byte, marker string, primary *overlay.AdmittanceInstructions) {
 	if s == nil || s.Submit == nil {
 		return
 	}
@@ -239,8 +245,15 @@ func (s *Shadow) logMismatch(kind string, j shadowJob, kv ...any) {
 	if s.logged.Add(1) > limit {
 		return
 	}
-	args := append([]any{"kind", kind, "txid", objectTxID(j.object), "topic", j.topic}, kv...)
+	args := append([]any{"route", s.route(), "kind", kind, "txid", objectTxID(j.object), "topic", j.topic}, kv...)
 	s.Log.Warn("feed: shadow engine MISMATCH", args...)
+}
+
+func (s *Shadow) route() string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return DefaultRoute
 }
 
 // Classify compares the primary's answer for a topic with the shadow's. A

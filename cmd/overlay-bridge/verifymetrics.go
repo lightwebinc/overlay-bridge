@@ -55,9 +55,9 @@ func newTimings() *timings {
 		}, []string{"outcome"}),
 		shadow: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "overlay_bridge_shadow_submit_duration_seconds",
-			Help:    "One submit to the shadow engine (-shadow-engine), its whole submit included. result: ok (answered 200) | error (unreachable, refused or failed).",
+			Help:    "One submit to a shadow engine, its whole submit included, by route (default = -shadow-engine, else the -engine-route glob). result: ok (answered 200) | error (unreachable, refused or failed).",
 			Buckets: submitBuckets,
-		}, []string{"result"}),
+		}, []string{"route", "result"}),
 	}
 	t.work = make(map[string]prometheus.Histogram, len(workCounters))
 	for _, w := range workCounters {
@@ -73,14 +73,17 @@ func newTimings() *timings {
 	for _, o := range []string{feed.OutcomeAdmitted, feed.OutcomeEmpty, feed.OutcomeError, feed.OutcomeRefused, feed.OutcomeEngineError} {
 		t.submit.WithLabelValues(o)
 	}
-	for _, r := range []string{"ok", "error"} {
-		t.shadow.WithLabelValues(r)
-	}
 	return t
 }
 
-func (t *timings) onShadow(result string, d time.Duration) {
-	t.shadow.WithLabelValues(result).Observe(d.Seconds())
+// onShadow returns the observer for one shadow, with its series preset.
+func (t *timings) onShadow(route string) func(result string, d time.Duration) {
+	for _, r := range []string{"ok", "error"} {
+		t.shadow.WithLabelValues(route, r)
+	}
+	return func(result string, d time.Duration) {
+		t.shadow.WithLabelValues(route, result).Observe(d.Seconds())
+	}
 }
 
 func (t *timings) onVerified(vd spv.Verdict) {

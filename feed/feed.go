@@ -111,6 +111,10 @@ type Feed struct {
 	// answered, with the primary's answer to compare against. It never
 	// delays or fails the primary submit.
 	Shadow *Shadow
+	// Routes send the topics each pattern names to a primary and a shadow of
+	// their own (first match wins); every other topic uses Submit and
+	// Shadow. See Route.
+	Routes []*Route
 
 	c counters
 
@@ -342,20 +346,21 @@ func (f *Feed) submitBackoff() time.Duration {
 func (f *Feed) submitOne(ctx context.Context, name string, object []byte, marker string, arrived time.Time) error {
 	retries := f.submitRetries()
 	backoff := f.submitBackoff()
+	engine, shadow := f.enginesFor(name)
 	var err error
 	for attempt := 0; ; attempt++ {
 		var steak overlay.Steak
-		if ms, ok := f.Submit.(MarkedSubmitter); ok && marker != "" {
+		if ms, ok := engine.(MarkedSubmitter); ok && marker != "" {
 			steak, err = ms.SubmitMarked(ctx, name, object, marker)
 		} else {
-			steak, err = f.Submit.Submit(ctx, name, object)
+			steak, err = engine.Submit(ctx, name, object)
 		}
 		if err == nil {
 			oc := outcomeOf(steak, name)
 			f.c.add(&f.c.submitted)
 			f.c.addSteak(name, oc)
 			f.observeSubmit(oc, arrived)
-			f.Shadow.offer(name, object, marker, steak[name])
+			shadow.Offer(name, object, marker, steak[name])
 			if attempt > 0 {
 				f.c.add(&f.c.retried)
 				if f.Log != nil {
@@ -367,7 +372,7 @@ func (f *Feed) submitOne(ctx context.Context, name string, object []byte, marker
 		if Refused(err) {
 			f.c.add(&f.c.engineRefused)
 			f.observeSubmit(OutcomeRefused, arrived)
-			f.Shadow.offer(name, object, marker, nil)
+			shadow.Offer(name, object, marker, nil)
 			if f.Log != nil {
 				f.Log.Warn("feed: engine refused the object", "topic", name, "err", err)
 			}
@@ -384,12 +389,21 @@ func (f *Feed) submitOne(ctx context.Context, name string, object []byte, marker
 	}
 	f.c.add(&f.c.engineError)
 	f.observeSubmit(OutcomeEngineError, arrived)
-	f.Shadow.offer(name, object, marker, nil)
+	shadow.Offer(name, object, marker, nil)
 	if f.Log != nil {
 		f.Log.Warn("feed: engine submit failed, object DROPPED",
 			"topic", name, "attempts", retries+1, "err", err)
 	}
 	return fmt.Errorf("feed: submit %s to engine after %d attempts: %w", name, retries+1, err)
+}
+
+// enginesFor picks the primary and the shadow for a topic: its route's, or
+// the feed's own.
+func (f *Feed) enginesFor(topic string) (Submitter, *Shadow) {
+	if r := RouteFor(f.Routes, topic); r != nil && r.Submit != nil {
+		return r.Submit, r.Shadow
+	}
+	return f.Submit, f.Shadow
 }
 
 // outcomeOf classifies the engine's answer for the topic we submitted.

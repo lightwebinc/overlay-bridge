@@ -30,6 +30,25 @@ func TestValidate(t *testing.T) {
 		{"shadow is the engine", func(c *config) { c.shadowEngine = "http://host:8080/" }, "same origin"},
 		{"shadow beside the engine", func(c *config) { c.shadowEngine = "http://host:8280" }, ""},
 		{"shadow in sink mode", func(c *config) { *c = config{mode: "sink", shadowEngine: "http://host:8280"} }, "submits nowhere"},
+		// Routes: one application's topics on another engine, with the old
+		// one as their shadow.
+		{"a route with its shadow", func(c *config) {
+			c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280,shadow=http://host:8080"}
+		}, ""},
+		{"a route without a shadow", func(c *config) { c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280"} }, ""},
+		{"a malformed route", func(c *config) { c.engineRoutes = routeFlags{"tm_bsecret_*"} }, "-engine-route"},
+		{"a route whose shadow is its primary", func(c *config) {
+			c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280,shadow=http://host:8280"}
+		}, "same origin"},
+		{"a route in sink mode", func(c *config) {
+			*c = config{mode: "sink", engineRoutes: routeFlags{"tm_*=http://host:8280"}}
+		}, "submits nowhere"},
+		{"shadow-facade with a default shadow", func(c *config) { c.shadowFacade, c.shadowEngine = true, "http://host:8280" }, ""},
+		{"shadow-facade with a routed shadow", func(c *config) {
+			c.shadowFacade = true
+			c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280,shadow=http://host:8080"}
+		}, ""},
+		{"shadow-facade with no shadow anywhere", func(c *config) { c.shadowFacade = true }, "needs a shadow"},
 		// Sink mode terminates and counts, so it needs none of it.
 		{"sink needs nothing", func(c *config) {
 			*c = config{mode: "sink"}
