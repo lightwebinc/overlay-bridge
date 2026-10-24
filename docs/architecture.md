@@ -71,7 +71,9 @@ Bare 80-byte headers arrive on their own lane, are proof-of-work checked and
 chained on arrival, and are held in a local store that is served to the engine
 as its chain tracker. The lane is a live tail: on start, or after a gap longer
 than the network's repair window, the store re-anchors from a header source the
-operator trusts and then follows the lane.
+operator trusts and then follows the lane. Every root it answers is booked by
+where it came from: the lane, history below the startup anchor, or a fallback
+for a height the lane missed ([provenance](header-feeder.md#provenance-is-counted)).
 
 ## facade (up)
 

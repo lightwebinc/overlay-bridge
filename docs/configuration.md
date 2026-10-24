@@ -113,15 +113,18 @@ against a p50 of 0.66 ms). `-header-warm` loads the most recent heights first,
 in parallel, before the lanes and the read API open; readiness follows the
 lanes, so `/readyz` turns ready only after it. It never fails startup: a height
 not loaded in time, or not answered, is fetched on first use. Warmed roots are
-still the anchor's answers and are booked as `fallback` when read, exactly as
-before. 2016 heights is two weeks of mainnet blocks; a proof older than the
-warmed range costs one round trip on first use, then is cached.
+the anchor's answers for heights the lane could not have carried, and are
+booked as `history` when read. 2016 heights is two weeks of mainnet blocks; a
+proof older than the warmed range costs one round trip on first use, then is
+cached.
 
 Re-anchoring resolves one parent per gap, not one per header. A root that came
-from the anchor is booked as `fallback` and reported `known: false`, so it
-does not flatter `overlay_bridge_tracker_roots_total{source="lane"}`, the
-metric that says whether the lane rather than a third party is feeding
-verification.
+from the anchor is reported `known: false` and booked as `history` at or below
+the startup anchor, `fallback` above it, so it does not flatter
+`overlay_bridge_tracker_roots_total{source="lane"}`, the metric that says
+whether the lane rather than a third party is feeding verification. Only
+`fallback` means the lane missed a height it should have carried; see
+[provenance](header-feeder.md#provenance-is-counted).
 
 ## Publishing
 

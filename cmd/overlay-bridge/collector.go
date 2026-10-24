@@ -49,7 +49,7 @@ var (
 	descTip = prometheus.NewDesc("overlay_bridge_header_tip_height",
 		"Best chained block height. A flat value with a live lane is the outage signature.", nil, nil)
 	descRoots = prometheus.NewDesc("overlay_bridge_tracker_roots_total",
-		"Roots answered, by where the answer came from. An all-fallback run has not demonstrated that the lane feeds verification.",
+		"Roots answered, by where the answer came from: lane = a header this host received on its header lane; history = the anchor's answer for a height the lane could not have carried to this process (at or below the startup anchor, or pruned out of -header-window); fallback = the anchor's answer for a height the lane should have carried (a gap, a re-anchored parent, a lane that stopped); miss = no answer. Only fallback means verification has moved off the lane.",
 		[]string{"source"}, nil)
 	descFacade = prometheus.NewDesc("overlay_bridge_facade_total",
 		"Facade submissions, by result.", []string{"result"}, nil)
@@ -285,6 +285,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		// to prove was undecidable from it.
 		s := c.store.Stats()
 		counter(ch, descRoots, s.FromLane, "lane")
+		counter(ch, descRoots, s.FromHistory, "history")
 		counter(ch, descRoots, s.FromFallback, "fallback")
 		counter(ch, descRoots, s.Misses, "miss")
 		w := c.store.WarmStats()

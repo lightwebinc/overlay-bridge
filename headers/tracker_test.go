@@ -137,9 +137,12 @@ func TestStoreBooksProvenanceOnTheServedPath(t *testing.T) {
 	if _, err := s.RootAt(context.Background(), 999999); err == nil {
 		// no fallback entry, so the stub returns nil,nil: a miss
 	}
+	// Height 50 is below the store's anchor (100), so the anchor's three
+	// answers for it are history, not a lane gap.
 	st := s.Stats()
-	if st.FromLane != 1 || st.FromFallback != 3 {
-		t.Fatalf("provenance = lane %d / fallback %d, want 1 / 3", st.FromLane, st.FromFallback)
+	if st.FromLane != 1 || st.FromHistory != 3 || st.FromFallback != 0 || st.Misses != 1 {
+		t.Fatalf("provenance = lane %d / history %d / fallback %d / miss %d, want 1 / 3 / 0 / 1",
+			st.FromLane, st.FromHistory, st.FromFallback, st.Misses)
 	}
 	// ...and the fallback was asked ONCE for the three answers: cached.
 	if fb.calls != 2 { // one for height 50, one for the miss at 999999

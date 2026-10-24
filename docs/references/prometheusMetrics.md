@@ -48,7 +48,7 @@ With `-pprof-listen` set, `net/http/pprof` is served on that loopback address
 | `overlay_bridge_engine_submits_total` | Counter | `topic`, `outcome` = `admitted`, `empty`, `error` | Engine submits by topic and admittance outcome. Preset at zero for every elected topic. |
 | `overlay_bridge_headers_total` | Counter | `outcome` = `observed`, `rejected`, `orphaned`, `reanchored`, `replaced`, `pruned` | Headers seen on the header lane. |
 | `overlay_bridge_header_tip_height` | Gauge | none | Best chained block height. Flat with a live lane is the outage signature. |
-| `overlay_bridge_tracker_roots_total` | Counter | `source` = `lane`, `fallback`, `miss` | Chain-tracker roots answered, by source. |
+| `overlay_bridge_tracker_roots_total` | Counter | `source` = `lane`, `history`, `fallback`, `miss` | Chain-tracker roots answered, by source: `lane` = a header received on this host's lane; `history` = the anchor's answer for a height the lane could not have carried to this process (at or below the startup anchor, or pruned out of `-header-window`); `fallback` = the anchor's answer for a height above the startup anchor that the lane did not deliver; `miss` = no answer. Every source is present from startup. See [provenance](../header-feeder.md#provenance-is-counted) |
 | `overlay_bridge_header_warm_heights` | Gauge | `state` = `target`, `loaded`, `failed` | Startup warm-up (`-header-warm`): heights it set out to load from the anchor, loaded, and not answered (those load on first use). `loaded / target` is its progress. |
 | `overlay_bridge_header_warm_duration_seconds` | Gauge | none | Wall time of the warm-up; 0 when it is off. |
 | `overlay_bridge_config_info` | Gauge | `verify`, `verify_network`, `verify_finality`, `engine_workers`, `gomaxprocs`, `gogc`, `gomemlimit` | Always 1. The run settings a measurement is stamped with (R7). |
@@ -76,3 +76,6 @@ components (`-mode sink` emits lane and build series only).
   worker waiting on an engine and nothing left to queue into.
 - `overlay_bridge_tracker_roots_total{source="lane"}` versus `{source="fallback"}`
   shows whether verification is sovereign or anchored on a third party.
+  `{source="history"}` is expected on every healthy host (proofs naming blocks
+  mined before the bridge started) and is not part of that question; a
+  sustained `fallback` rate is.

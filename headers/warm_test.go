@@ -66,9 +66,10 @@ func TestWarmMovesTheRoundTripOffTheVerifyPath(t *testing.T) {
 	if got := fb.calls.Load() - before; got != 0 {
 		t.Fatalf("%d fallback calls for warmed heights, want 0", got)
 	}
-	// A warmed root is still the fallback's answer, and is booked as such.
-	if st := s.Stats(); st.FromFallback != 100 || st.FromLane != 0 {
-		t.Fatalf("provenance %+v: warmed roots must book as fallback", st)
+	// A warmed root is the anchor's answer for a height the lane could not
+	// have carried: history, never lane, and never fallback.
+	if st := s.Stats(); st.FromHistory != 100 || st.FromFallback != 0 || st.FromLane != 0 {
+		t.Fatalf("provenance %+v: warmed roots must book as history", st)
 	}
 	// A height outside the warmed range still goes to the fallback.
 	if _, err := s.RootAt(t.Context(), 900); err != nil {

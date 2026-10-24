@@ -147,12 +147,26 @@ type Store struct {
 	// own verification path. Bounded by fallbackCap; cleared when full.
 	fallbackRoots map[uint32]chainhash.Hash
 
+	// historyTop is the highest height at which an answer the lane did not
+	// give is chain HISTORY rather than a gap in the lane. It starts at the
+	// startup anchor: the lane is a live tail from there, so no height at or
+	// below it could have come down this process's lane, and nearly every
+	// object carries ancestors mined before the process started. It rises
+	// with the retention window's floor, because a height pruned out of the
+	// window was let go by design. It never falls, and it does not follow
+	// re-anchoring: a height above it that the anchor had to supply (a gap,
+	// a re-anchored parent, a lane that stopped) is exactly what the fallback
+	// count exists to show. A re-anchored header at or below it is history:
+	// the lane could have carried one only in a reorg crossing the startup
+	// point, and the reanchored header count still shows that.
+	historyTop uint32
+
 	observed, rejected, orphaned, reanchored, replaced, pruned uint64
 	// Provenance of RootAt answers. Counted HERE because this is the path the
 	// engine's reads actually take (over the read API), so a counter kept on
 	// an in-process adapter that the engine never calls would read zero for
 	// the life of the process.
-	fromLane, fromFallback, misses uint64
+	fromLane, fromHistory, fromFallback, misses uint64
 
 	// warm is the startup warm-up's progress (warm.go).
 	warm warmState
@@ -180,6 +194,7 @@ func New(o Options) (*Store, error) {
 		tip:           o.Anchor.Hash,
 		tipH:          o.Anchor.Height,
 		lowest:        o.Anchor.Height,
+		historyTop:    o.Anchor.Height,
 		opt:           o,
 		fallbackRoots: map[uint32]chainhash.Hash{},
 	}, nil
@@ -355,6 +370,11 @@ func (s *Store) pruneLocked() {
 	if cutoff > s.lowest {
 		s.lowest = cutoff
 	}
+	// Below the window's floor the store holds nothing by design, so a root
+	// asked for there is history whether or not the lane once carried it.
+	if cutoff > 0 && cutoff-1 > s.historyTop {
+		s.historyTop = cutoff - 1
+	}
 }
 
 // Tip returns the best header seen so far.
@@ -366,7 +386,9 @@ func (s *Store) Tip() (chainhash.Hash, uint32) {
 
 // RootAt serves the canonical chain's root for a height, falling back below
 // the anchor and across gaps. Fallback answers are cached, and every answer is
-// booked by where it came from.
+// booked by where it came from: lane (a header this host received on its
+// lane), history or fallback (the anchor's answer, below or above historyTop),
+// or miss.
 func (s *Store) RootAt(ctx context.Context, height uint32) (*chainhash.Hash, error) {
 	s.mu.Lock()
 	hash, ok := s.canon[height]
@@ -379,7 +401,7 @@ func (s *Store) RootAt(ctx context.Context, height uint32) (*chainhash.Hash, err
 		// its root came from the anchor, not from the lane. Book it where it
 		// came from.
 		if e.viaAnchor {
-			s.fromFallback++
+			s.bookAnchoredLocked(height)
 		} else {
 			s.fromLane++
 		}
@@ -388,7 +410,7 @@ func (s *Store) RootAt(ctx context.Context, height uint32) (*chainhash.Hash, err
 		return &r, nil
 	}
 	if r, cached := s.fallbackRoots[height]; cached {
-		s.fromFallback++
+		s.bookAnchoredLocked(height)
 		s.mu.Unlock()
 		return &r, nil
 	}
@@ -408,9 +430,23 @@ func (s *Store) RootAt(ctx context.Context, height uint32) (*chainhash.Hash, err
 		s.fallbackRoots = map[uint32]chainhash.Hash{}
 	}
 	s.fallbackRoots[height] = *r
-	s.fromFallback++
+	s.bookAnchoredLocked(height)
 	s.mu.Unlock()
 	return r, nil
+}
+
+// bookAnchoredLocked books a root the anchor supplied, whether fetched now,
+// cached or held as a re-anchored header. At or below historyTop it is
+// history: the lane could not have carried that height to this process.
+// Above it, the lane should have, so it is fallback, the posture change.
+// One comparison, because it sits on every read of an older root. s.mu must
+// be held.
+func (s *Store) bookAnchoredLocked(height uint32) {
+	if height <= s.historyTop {
+		s.fromHistory++
+	} else {
+		s.fromFallback++
+	}
 }
 
 // HeaderForHeight names the block at a height and its root. For a height on
@@ -429,7 +465,7 @@ func (s *Store) HeaderForHeight(ctx context.Context, height uint32) (hash, root 
 		// Same rule as RootAt: a re-anchored header is held here but came
 		// from the anchor, so it is booked there and reported NOT known.
 		if e.viaAnchor {
-			s.fromFallback++
+			s.bookAnchoredLocked(height)
 			s.mu.Unlock()
 			return h, e.root, false, nil
 		}
@@ -448,7 +484,11 @@ func (s *Store) HeaderForHeight(ctx context.Context, height uint32) (hash, root 
 		s.bump(&s.misses)
 		return hash, root, false, err
 	}
-	s.bump(&s.fromFallback)
+	// History or fallback, the answer is still the anchor's: known stays
+	// false either way.
+	s.mu.Lock()
+	s.bookAnchoredLocked(height)
+	s.mu.Unlock()
 	return hash, root, false, nil
 }
 

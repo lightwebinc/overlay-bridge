@@ -53,7 +53,71 @@ would report a healthy tip.
 
 ## Provenance is counted
 
-`overlay_bridge_tracker_roots_total` splits answers by `lane` and `fallback`.
-The claim the bridge makes is that verification is fed by the lane, and a run
-in which every root was served by the fallback has not demonstrated it. Check
-the split before believing the claim.
+`overlay_bridge_tracker_roots_total` books every root the store answers by
+where the answer came from:
+
+| `source` | Answered by | Heights |
+| --- | --- | --- |
+| `lane` | a header this host received on its own lane | any |
+| `history` | the anchor (`-header-anchor`) | at or below the startup anchor, and any height pruned out of `-header-window` |
+| `fallback` | the anchor | above the startup anchor: a height the lane did not deliver (a gap, a re-anchored parent, a lane that stopped) |
+| `miss` | nobody | any |
+
+The claim the bridge makes is that verification is fed by the lane, and only
+`fallback` speaks against it. The lane is a live tail from the startup anchor,
+so no height at or below the anchor could have come down this process's lane,
+yet nearly every object carries an ancestor mined before the bridge started
+and its proof names such a height. Those answers are `history`: expected on
+every healthy host, and silent about the lane. A `fallback` answer is a height
+the lane should have carried and did not, which is the posture change worth an
+alert. Check `fallback` against `lane` before believing the claim.
+
+The split is by height alone, decided in one comparison:
+
+- A re-anchored header keeps the booking of its height. Above the startup
+  anchor it stays `fallback` until the lane delivers that header itself, and
+  from then on it is `lane`.
+- A header the lane delivers is `lane` at any height, including one at or
+  below the startup anchor that a reorg made canonical.
+- A re-anchored header at or below the startup anchor is `history`. The lane
+  could have carried one only in a reorg crossing the startup point, and
+  `overlay_bridge_headers_total{outcome="reanchored"}` still counts it.
+- The boundary is fixed at startup and only rises, with the retention
+  window's floor. A restart moves it up to the new anchor, so heights the
+  previous process received on its lane become `history` for the next one.
+
+`known` on the read API does not follow this split: it is true only for a
+header received on the lane, and both `history` and `fallback` answer
+`known: false`.
+
+## Not built: keeping the lane's headers across a restart
+
+Every restart turns the lane's own record into anchor answers: the store
+starts empty at the anchor's tip, and every height the previous process
+received becomes `history` (and `known: false`). Keeping received headers in a
+local state directory would stop that. The design, which is not implemented:
+
+- **What is kept.** Only headers received on the lane, never re-anchored ones,
+  as the raw 80-byte headers with their heights, appended as they chain and
+  bounded like the store (the retention window, or the warm-up depth). Raw
+  headers, not roots, so the next process checks them itself rather than
+  trusting its own disk. A write is an append off the lane's hot path; losing
+  the last few on a crash only means those heights are `history` once.
+- **Proof of work on load.** Every kept header is checked against
+  `-header-min-bits` and must link to its predecessor by hash. A file that
+  fails either is discarded whole, counted and logged, and the bridge starts
+  as it does now.
+- **Linkage to the anchor.** Heights on disk are claims. The kept chain is
+  accepted only up to a header the anchor confirms at the same height
+  (`/v1/header/{hash}`): one anchor call at startup. Everything below a
+  confirmed header is linked to it by hash, so the kept chain is the anchor's
+  chain without trusting the anchor for more than the startup tip it is
+  already trusted for.
+- **A reorg while the bridge was down.** If the anchor does not confirm the
+  kept tip, walk back to the highest kept header it does confirm, within a
+  bound, and drop what lies above it: that branch lost. If none is confirmed
+  within the bound (a deep reorg, or a chain reset), drop the file.
+- **What it books.** A restored header is one this host received on its lane,
+  so it answers as `lane` and `known: true`. The heights mined while the
+  bridge was down stay `history`: the lane did not carry them to this host.
+  The warm-up then only needs the heights the kept chain does not cover.

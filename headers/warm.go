@@ -58,8 +58,11 @@ func (s *Store) WarmStats() WarmStats {
 // the bridge's verify p99 at 21 ms against a p50 of 0.66 ms. Loading them
 // before the lanes open moves the round trips off the path.
 //
-// Provenance is unchanged: a warmed root is still the fallback's answer and is
-// booked as fallback when it is read, because the bridge did not receive it.
+// Provenance: a warmed root is the anchor's answer for a height at or below
+// the anchor, so it is booked as history when it is read. The bridge did not
+// receive it, so it is never booked as lane; and the lane, a live tail from the
+// anchor, could not have carried it, so it is not booked as fallback either,
+// which would report a lane gap on every host that verifies an older ancestor.
 // A height the lane later delivers is answered from the lane, as before: the
 // canonical chain is consulted before the cache.
 //

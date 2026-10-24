@@ -71,6 +71,13 @@ func TestStartupWarmsThroughTheAnchorAndPublishesIt(t *testing.T) {
 		`overlay_bridge_header_warm_heights{state="loaded"} 300`,
 		`overlay_bridge_header_warm_heights{state="failed"} 0`,
 		`overlay_bridge_header_warm_duration_seconds `,
+		// The 300 reads of warmed heights are at or below the startup anchor:
+		// history, not a lane gap. Every source is present, at zero if unused,
+		// so a rule or panel never reads an absent series as zero.
+		`overlay_bridge_tracker_roots_total{source="history"} 300`,
+		`overlay_bridge_tracker_roots_total{source="fallback"} 0`,
+		`overlay_bridge_tracker_roots_total{source="lane"} 0`,
+		`overlay_bridge_tracker_roots_total{source="miss"} 0`,
 		`overlay_bridge_verify_object_inputs_sum 4`,
 		`overlay_bridge_verify_object_ancestor_depth_sum 2`,
 		`overlay_bridge_verify_object_txs_count 1`,
