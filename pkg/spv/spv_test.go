@@ -445,3 +445,54 @@ func TestWorkCounters(t *testing.T) {
 		t.Fatalf("unparsed object: inputs %d depth %d, want 0", vd.Inputs, vd.Depth)
 	}
 }
+
+// TestSkipScriptsWaivesOnlyScripts: with SkipScripts a bad signature passes
+// (the caller holds a verdict on the bytes), and every other check still
+// refuses: a merkle path the chain does not commit to, outputs above inputs,
+// a P2SH output, an immature coinbase spend.
+func TestSkipScriptsWaivesOnlyScripts(t *testing.T) {
+	f := newFixture(t)
+	bad := f.spend(t, 0)
+	other := f.spend(t, 1)
+	bad.Inputs[0].UnlockingScript = other.Inputs[0].UnlockingScript
+	skip := &Verifier{Tracker: f.tracker(), Network: NetworkAll, SkipScripts: true}
+	vd := skip.Verify(t.Context(), beefOf(t, bad))
+	check(t, vd, ResultOK, ReasonNone)
+	if vd.Scripts != 0 || vd.Transactions != 2 {
+		t.Fatalf("scripts %d transactions %d, want 0 and 2", vd.Scripts, vd.Transactions)
+	}
+	check(t, skip.Verify(t.Context(), beefOf(t, f.child)), ResultOK, ReasonNone)
+
+	tr := f.tracker()
+	tr.m[100] = chainhash.Hash{0xaa}
+	check(t, (&Verifier{Tracker: tr, Network: NetworkAll, SkipScripts: true}).Verify(t.Context(), beefOf(t, f.child)), ResultRefused, ReasonMerkle)
+	tr = &roots{m: map[uint32]chainhash.Hash{}, tip: 50}
+	check(t, (&Verifier{Tracker: tr, Network: NetworkAll, SkipScripts: true}).Verify(t.Context(), beefOf(t, f.child)), ResultError, ReasonNotYet)
+
+	over := transaction.NewTransaction()
+	over.AddInputFromTx(f.src, 0, f.unlock)
+	over.AddOutput(&transaction.TransactionOutput{Satoshis: 100_001, LockingScript: f.lock})
+	if err := over.Sign(); err != nil {
+		t.Fatal(err)
+	}
+	if vd := skip.Verify(t.Context(), beefOf(t, over)); vd.Result != ResultRefused || !errors.Is(vd.Err, sdkspv.ErrOutputsExceedInputs) {
+		t.Fatalf("outputs above inputs: %s %v", vd.Result, vd.Err)
+	}
+
+	p2shTx := transaction.NewTransaction()
+	p2shTx.AddInputFromTx(f.src, 0, f.unlock)
+	p2sh := script.Script(append(append([]byte{0xa9, 0x14}, make([]byte, 20)...), 0x87))
+	p2shTx.AddOutput(&transaction.TransactionOutput{Satoshis: 1000, LockingScript: &p2sh})
+	if err := p2shTx.Sign(); err != nil {
+		t.Fatal(err)
+	}
+	if vd := (&Verifier{Tracker: f.tracker(), Network: NetworkMain, SkipScripts: true}).Verify(t.Context(), beefOf(t, p2shTx)); vd.Result != ResultRefused || !errors.Is(vd.Err, sdkspv.ErrP2SHOutput) {
+		t.Fatalf("P2SH output: %s %v", vd.Result, vd.Err)
+	}
+
+	cf, spend := coinbaseFixture(t)
+	immature := &roots{m: map[uint32]chainhash.Hash{100: *cf.src.TxID()}, tip: 150}
+	if vd := (&Verifier{Tracker: immature, Network: NetworkAll, SkipScripts: true}).Verify(t.Context(), beefOf(t, spend)); vd.Result != ResultRefused {
+		t.Fatalf("immature coinbase spend: %s %v", vd.Result, vd.Err)
+	}
+}

@@ -70,6 +70,8 @@ type graph struct {
 	tracker  chaintracker.ChainTracker
 	heights  scriptflag.ActivationHeights
 	finality FinalityPolicy
+	// skipScripts leaves the interpreter out (Verifier.SkipScripts).
+	skipScripts bool
 
 	txids   map[*transaction.Transaction]chainhash.Hash
 	mined   map[chainhash.Hash]uint32
@@ -248,6 +250,9 @@ func (g *graph) checkTx(tx *transaction.Transaction) error {
 	}
 	if outTotal > inTotal {
 		return fmt.Errorf("%w: %s pays %d and spends %d", sdkspv.ErrOutputsExceedInputs, txid, outTotal, inTotal)
+	}
+	if g.skipScripts {
+		return nil
 	}
 	for vin, in := range tx.Inputs {
 		coin := uint32(unminedHeight)

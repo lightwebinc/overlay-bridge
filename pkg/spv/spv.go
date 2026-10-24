@@ -150,6 +150,12 @@ type Verifier struct {
 	// Timeout bounds one verification. Zero means 5 s. A script that runs
 	// past it ends the verification with ResultError, never ResultOK.
 	Timeout time.Duration
+	// SkipScripts runs every check but the scripts: merkle paths, structure,
+	// amounts, finality under the policy and maturity. It is for a caller
+	// that already holds a passing verdict on these exact bytes from a
+	// verifier it trusts: an engine that accepted the bridge's marker
+	// (marker.go). Verdict.Scripts is then 0.
+	SkipScripts bool
 }
 
 // Verify verifies one BEEF object (BRC-62 V1, BRC-96 V2 or BRC-95 Atomic).
@@ -208,7 +214,7 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 		fin = FinalityIgnore
 	}
 	g := &graph{
-		ctx: ctx, tracker: tracker, heights: v.Network.heights(), finality: fin,
+		ctx: ctx, tracker: tracker, heights: v.Network.heights(), finality: fin, skipScripts: v.SkipScripts,
 		txids: map[*transaction.Transaction]chainhash.Hash{}, mined: map[chainhash.Hash]uint32{},
 	}
 	for _, id := range txids {
