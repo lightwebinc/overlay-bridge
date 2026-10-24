@@ -25,6 +25,7 @@ import (
 	"github.com/lightwebinc/overlay-bridge/feed"
 	"github.com/lightwebinc/overlay-bridge/guard"
 	"github.com/lightwebinc/overlay-bridge/headers"
+	"github.com/lightwebinc/overlay-bridge/pkg/secpverify"
 	"github.com/lightwebinc/overlay-bridge/pkg/spv"
 	"github.com/lightwebinc/overlay-bridge/uptunnel"
 	"github.com/lightwebinc/shard-common/objfmt"
@@ -85,6 +86,7 @@ type config struct {
 	verifyFinality  string
 	verifyMarkerKey string
 	verifyTimeout   time.Duration
+	sigVerifier     string
 }
 
 func main() {
@@ -131,6 +133,7 @@ func main() {
 	flag.StringVar(&c.verifyFinality, "verify-finality", "ignore", "finality policy for unmined transactions: ignore (the overlay plane: committed-record carriers are non-final by design) | require (bitcoin-sv's rule)")
 	flag.StringVar(&c.verifyMarkerKey, "verify-marker-key", "", "file holding the key the enforce-mode trust marker is computed under; mode 0600; required for enforce")
 	flag.DurationVar(&c.verifyTimeout, "verify-timeout", 5*time.Second, "ceiling on one verification; past it the object goes to the engine unmarked")
+	flag.StringVar(&c.sigVerifier, "sig-verifier", "decred", "secp256k1 ECDSA verifier behind go-sdk's hooks: decred (pkg/secpverify, decred's secp256k1, the same verdicts) | sdk (go-sdk's built-in crypto/ecdsa path)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 
@@ -154,6 +157,10 @@ func run(c config, log *slog.Logger) error {
 	defer stop()
 
 	log.Info("overlay-bridge starting", "version", Version, "mode", c.mode)
+	if c.verifier() == "decred" {
+		secpverify.Install()
+	}
+	log.Info("ECDSA verifier", "sig_verifier", c.verifier())
 
 	names := splitList(c.topics)
 	reconcileTopics(ctx, c, names, log)
@@ -429,6 +436,11 @@ func (c config) validate() error {
 	if _, err := spv.ParseFinality(c.verifyFinality); err != nil {
 		return fmt.Errorf("-verify-finality: %w", err)
 	}
+	switch c.verifier() {
+	case "decred", "sdk":
+	default:
+		return fmt.Errorf("-sig-verifier must be decred or sdk, got %q", c.sigVerifier)
+	}
 	if c.verifyMode == string(feed.VerifyEnforce) && c.verifyMarkerKey == "" {
 		return errors.New("-verify enforce needs -verify-marker-key: without the marker the engine verifies every object again and enforce only adds a second verification")
 	}
@@ -480,8 +492,16 @@ func configLabels(c config) []string {
 	}
 	return []string{
 		c.verifyMode, c.verifyNetwork, c.verifyFinality,
-		strconv.Itoa(c.engineWorkers), strconv.Itoa(runtime.GOMAXPROCS(0)), gogc, limit,
+		strconv.Itoa(c.engineWorkers), strconv.Itoa(runtime.GOMAXPROCS(0)), gogc, limit, c.verifier(),
 	}
+}
+
+// verifier is -sig-verifier, decred when unset.
+func (c config) verifier() string {
+	if c.sigVerifier == "" {
+		return "decred"
+	}
+	return c.sigVerifier
 }
 
 // warmStore runs the header warm-up before the lanes open, bounded by

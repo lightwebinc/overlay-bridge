@@ -44,7 +44,7 @@ public packages, never forked.
 - [Architecture](docs/architecture.md): the feed, the header store, the facade and the loop guard, and what each holds
 - [Configuration](docs/configuration.md): every flag, defaults, the modes, and the startup checks that refuse a half-configured host
 - [The header feeder](docs/header-feeder.md): the header lane as a chain tracker, the two read shapes, anchoring and re-anchoring, and where each root came from (lane, history, fallback)
-- [SPV verification](docs/spv.md): verify delivered objects in Go (`-verify off|shadow|enforce`), and the loopback trust marker that lets the engine skip its script checks
+- [SPV verification](docs/spv.md): verify delivered objects in Go (`-verify off|shadow|enforce`), the loopback trust marker that lets the engine skip its script checks, and the ECDSA verifier behind go-sdk's hooks (`-sig-verifier`)
 - [The shadow engine](docs/shadow.md): feed a second engine every object the primary is fed (`-shadow-engine`), compare the two answers per topic, and never let the shadow slow the primary; per-topic routes (`-engine-route`) for a cutover one application at a time, and `-shadow-facade` so the publishing host counts parity too
 - [Deliver once](docs/deliver-once.md): one delivery slot per landing site, and how a site that runs several bridges fans out locally
 - [Metrics reference](docs/references/prometheusMetrics.md): every `overlay_bridge_*` series, its labels and meaning

@@ -17,6 +17,9 @@ func TestValidate(t *testing.T) {
 	}{
 		{"a valid config", func(*config) {}, ""},
 		{"unknown mode", func(c *config) { c.mode = "bogus" }, "-mode must be"},
+		{"decred verifier", func(c *config) { c.sigVerifier = "decred" }, ""},
+		{"sdk verifier", func(c *config) { c.sigVerifier = "sdk" }, ""},
+		{"unknown verifier", func(c *config) { c.sigVerifier = "openssl" }, "-sig-verifier must be"},
 		{"no engine", func(c *config) { c.engine = "" }, "-engine is required"},
 		// The TypeScript host mounts submit on the app root and cannot be
 		// given a prefix, so a prefix here is simply wrong.

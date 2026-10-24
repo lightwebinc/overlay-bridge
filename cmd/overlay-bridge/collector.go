@@ -104,8 +104,8 @@ var (
 	descShadowQueueCap = prometheus.NewDesc("overlay_bridge_shadow_queue_capacity",
 		"Size of a shadow engine's queue (-shadow-queue), by route.", []string{"route"}, nil)
 	descConfig = prometheus.NewDesc("overlay_bridge_config_info",
-		"Always 1. Labels carry the run settings a measurement must be stamped with (R7): verify mode, network and finality, engine workers, GOMAXPROCS, GOGC and GOMEMLIMIT.",
-		[]string{"verify", "verify_network", "verify_finality", "engine_workers", "gomaxprocs", "gogc", "gomemlimit"}, nil)
+		"Always 1. Labels carry the run settings a measurement must be stamped with (R7): verify mode, network and finality, engine workers, GOMAXPROCS, GOGC, GOMEMLIMIT and the ECDSA verifier (-sig-verifier).",
+		[]string{"verify", "verify_network", "verify_finality", "engine_workers", "gomaxprocs", "gogc", "gomemlimit", "sig_verifier"}, nil)
 )
 
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {

@@ -18,18 +18,19 @@ Contents:
    1. github.com/beorn7/perks  (MIT License)
    2. github.com/bsv-blockchain/go-sdk  (Open BSV License Version 5)
    3. github.com/cespare/xxhash/v2  (MIT License)
-   4. github.com/lightwebinc/shard-common  (Apache License 2.0)
-   5. github.com/lightwebinc/teranode-bridge  (Apache License 2.0)
-   6. github.com/mrz1836/go-whatsonchain  (MIT License)
-   7. github.com/munnerz/goautoneg  (BSD License)
-   8. github.com/pkg/errors  (BSD License)
-   9. github.com/prometheus/client_golang  (Apache License 2.0)
-  10. github.com/prometheus/client_model  (Apache License 2.0)
-  11. github.com/prometheus/common  (Apache License 2.0)
-  12. github.com/prometheus/procfs  (Apache License 2.0)
-  13. golang.org/x/crypto  (BSD License)
-  14. golang.org/x/sys  (BSD License)
-  15. google.golang.org/protobuf  (BSD License)
+   4. github.com/decred/dcrd/dcrec/secp256k1/v4  (ISC License)
+   5. github.com/lightwebinc/shard-common  (Apache License 2.0)
+   6. github.com/lightwebinc/teranode-bridge  (Apache License 2.0)
+   7. github.com/mrz1836/go-whatsonchain  (MIT License)
+   8. github.com/munnerz/goautoneg  (BSD License)
+   9. github.com/pkg/errors  (BSD License)
+  10. github.com/prometheus/client_golang  (Apache License 2.0)
+  11. github.com/prometheus/client_model  (Apache License 2.0)
+  12. github.com/prometheus/common  (Apache License 2.0)
+  13. github.com/prometheus/procfs  (Apache License 2.0)
+  14. golang.org/x/crypto  (BSD License)
+  15. golang.org/x/sys  (BSD License)
+  16. google.golang.org/protobuf  (BSD License)
 
 ================================================================================
 1. github.com/beorn7/perks
@@ -178,7 +179,30 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ================================================================================
-4. github.com/lightwebinc/shard-common
+4. github.com/decred/dcrd/dcrec/secp256k1/v4
+   ISC License
+================================================================================
+
+ISC License
+
+Copyright (c) 2013-2017 The btcsuite developers
+Copyright (c) 2015-2024 The Decred developers
+Copyright (c) 2017 The Lightning Network Developers
+
+Permission to use, copy, modify, and distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+================================================================================
+5. github.com/lightwebinc/shard-common
    Apache License 2.0
 ================================================================================
 
@@ -385,7 +409,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
    limitations under the License.
 
 ================================================================================
-5. github.com/lightwebinc/teranode-bridge
+6. github.com/lightwebinc/teranode-bridge
    Apache License 2.0
 ================================================================================
 
@@ -592,7 +616,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
    limitations under the License.
 
 ================================================================================
-6. github.com/mrz1836/go-whatsonchain
+7. github.com/mrz1836/go-whatsonchain
    MIT License
 ================================================================================
 
@@ -619,7 +643,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-7. github.com/munnerz/goautoneg
+8. github.com/munnerz/goautoneg
    BSD License
 ================================================================================
 
@@ -656,7 +680,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-8. github.com/pkg/errors
+9. github.com/pkg/errors
    BSD License
 ================================================================================
 
@@ -685,7 +709,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-9. github.com/prometheus/client_golang
+10. github.com/prometheus/client_golang
    Apache License 2.0
 ================================================================================
 
@@ -892,7 +916,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
    limitations under the License.
 
 ================================================================================
-10. github.com/prometheus/client_model
+11. github.com/prometheus/client_model
    Apache License 2.0
 ================================================================================
 
@@ -1099,7 +1123,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
    limitations under the License.
 
 ================================================================================
-11. github.com/prometheus/common
+12. github.com/prometheus/common
    Apache License 2.0
 ================================================================================
 
@@ -1306,7 +1330,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
    limitations under the License.
 
 ================================================================================
-12. github.com/prometheus/procfs
+13. github.com/prometheus/procfs
    Apache License 2.0
 ================================================================================
 
@@ -1513,7 +1537,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
    limitations under the License.
 
 ================================================================================
-13. golang.org/x/crypto
+14. golang.org/x/crypto
    BSD License
 ================================================================================
 
@@ -1546,7 +1570,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-14. golang.org/x/sys
+15. golang.org/x/sys
    BSD License
 ================================================================================
 
@@ -1579,7 +1603,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
-15. google.golang.org/protobuf
+16. google.golang.org/protobuf
    BSD License
 ================================================================================
 

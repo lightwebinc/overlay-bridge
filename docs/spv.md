@@ -103,10 +103,12 @@ In enforce mode the bridge marks each passing object with a header:
 X-Overlay-Bridge-Verified: v1=<hex HMAC-SHA256(key, "overlay-bridge-verified/v1\0" || body)>
 ```
 
-The engine honours the marker only when **all** of these conditions hold:
+Both engines the bridge feeds honor the marker the same way: the
+TypeScript host (overlay-blueprints) and the Go one (overlay-engine). The
+engine honors the marker only when **all** of these conditions hold:
 
-1. It is configured to honour it. Trust is off by default
-   (`OVERLAY_TRUST_BRIDGE_VERIFY=true` in overlay-blueprints).
+1. It is configured to honor it. Trust is off by default
+   (`OVERLAY_TRUST_BRIDGE_VERIFY=true` in both).
 2. The request arrived on a loopback address.
 3. It holds the same key (`OVERLAY_BRIDGE_MARKER_KEY_FILE`), and the HMAC over
    the body it actually read matches, compared in constant time.
@@ -130,7 +132,9 @@ The marker waives **script** verification only. With an accepted marker,
 the engine still parses the object, checks every merkle path against its own
 chain tracker, checks amounts and runs its topic managers. overlay-blueprints
 does this through the SDK's script-verification backend seam: it trusts the
-object's txids for the duration of that one submission. A txid commits to
+object's txids for the duration of that one submission. A Go engine runs
+`pkg/spv` with `Verifier.SkipScripts`: every check of a full verification but
+the interpreter loop. A txid commits to
 the unlocking scripts and to every source txid, and therefore to every
 locking script and amount the scripts are checked against. A verdict about a
 txid therefore holds for any submission that carries it. The engine fork is
@@ -151,10 +155,35 @@ engine verifies them as before.
 | `overlay_bridge_feed_total{outcome="spv_refused"}` | Objects that enforce mode did not submit |
 | `overlay_bridge_feed_total{outcome="engine_refused"}` | Engine 4xx answers. These are not retried |
 
-On the engine side, a skipped check is recorded as
+On the TypeScript engine, a skipped check is recorded as
 `overlay_host_verify_duration_seconds{path="bridge"}` (its duration is the
 cost of the skip) and as `overlay_host_verify_skipped_total`. To read the
-engine's real verify latency, filter on `path=~"worker|inline"`.
+engine's real verify latency, filter on `path=~"worker|inline"`. The Go
+engine counts every marker in `overlay_go_bridge_marker_total{result}`.
+
+## The ECDSA verifier (`-sig-verifier`)
+
+Most of a verification is signature checks: one per input of every unproven
+transaction. go-sdk's own verifier hands its curve to `crypto/ecdsa`, which
+takes the generic-curve path. go-sdk also offers two hooks for an external
+verifier (`primitives/ec` for `Signature.Verify`, `script/interpreter` for
+`OP_CHECKSIG`), and `pkg/secpverify` fills both with decred's secp256k1
+(`github.com/decred/dcrd/dcrec/secp256k1/v4`, the curve code under btcd's
+`btcec/v2`), pure Go. The default, `-sig-verifier decred`, installs it at
+startup; `sdk` keeps go-sdk's built-in path.
+
+The verdicts are the same. `pkg/secpverify` documents input by input why (the
+hash, strict DER, high S, every key encoding, the edge cases of the
+arithmetic), its tests compare the two paths over random and adversarial
+cases at the function and the script level, and go-sdk v1.7.3's own test
+suites pass with it as the default verifier. The one input class where the
+two differ, a compressed key whose x is at or above the field prime, is one
+no signature can be produced for; decred refuses the key, as bitcoin-sv
+does.
+
+On a 2020 desktop CPU (Ryzen 7 PRO 4750G, one core) a signature check costs
+140 us against 182 us built in, and a P2PKH input's script 152 us against
+213 us.
 
 ## Rollout
 

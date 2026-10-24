@@ -116,6 +116,7 @@ decision; it is not a configuration change.
 - [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common): the push object-frame codecs, including the BRC-149 delivery record
 - [`github.com/bsv-blockchain/go-sdk`](https://github.com/bsv-blockchain/go-sdk): BEEF parsing and block-header hashing
 - [`github.com/prometheus/client_golang`](https://github.com/prometheus/client_golang): metrics
+- [`github.com/decred/dcrd/dcrec/secp256k1/v4`](https://github.com/decred/dcrd/tree/master/dcrec/secp256k1): the secp256k1 ECDSA verifier behind go-sdk's hooks (`pkg/secpverify`, `-sig-verifier`)
 
 The bridge links no overlay engine module. The two contracts it needs, the
 submit request and its admittance response in both engines' wire forms, are

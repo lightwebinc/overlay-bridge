@@ -79,6 +79,7 @@ shadow metrics. The feed and the facade route alike.
 | `-verify-finality` | `ignore` | finality policy for unmined transactions: `ignore` (the overlay plane; committed-record carriers are non-final by design) or `require` (bitcoin-sv's rule). See [SPV verification](spv.md) |
 | `-verify-marker-key` | (none) | file holding the trust-marker key, mode 0600, at least 32 bytes; **required** for `enforce`, and startup fails without it |
 | `-verify-timeout` | `5s` | ceiling on one verification; past it the object goes to the engine unmarked |
+| `-sig-verifier` | `decred` | the secp256k1 ECDSA verifier behind go-sdk's hooks: `decred` (`pkg/secpverify`, decred's secp256k1, the same verdicts, about a quarter less per signature) or `sdk` (go-sdk's built-in path). See [SPV verification](spv.md), "The ECDSA verifier" |
 
 ## Headers
 

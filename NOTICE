@@ -65,7 +65,7 @@ this notice does not modify those licenses.
 
 The list below names the significant ones. It is NOT the complete set:
 a statically linked binary contains every module it imports, directly or
-not, and LICENSE-THIRD-PARTY reproduces all 15 of their licenses
+not, and LICENSE-THIRD-PARTY reproduces all 16 of their licenses
 verbatim. That file is generated from what the binary actually links
 rather than maintained by hand, and it ships inside the container image,
 because nearly every license here requires its own text to reach whoever
@@ -74,6 +74,7 @@ receives a binary and static linking discards the files they live in.
   github.com/lightwebinc/teranode-bridge      Apache License 2.0
   github.com/lightwebinc/shard-common         Apache License 2.0
   github.com/bsv-blockchain/go-sdk            Open BSV License Version 5
+  github.com/decred/dcrd/dcrec/secp256k1/v4   ISC License
   github.com/prometheus/client_golang         Apache License 2.0
   google.golang.org/protobuf                  BSD 3-Clause License
 
