@@ -39,7 +39,13 @@ subscription and this configuration have drifted apart, so alert on it.
 | `-engine-timeout` | `30s` | per-submit ceiling |
 | `-engine-workers` | `4` | concurrent engine submits. The lane never waits on the engine, so an engine stall cannot hold the delivery socket past the edge's write deadline |
 | `-engine-queue` | `256` | deliveries queued behind the workers. A full queue sheds: the delivery is counted, logged and refused, and the host misses that object until its own catch-up finds it |
+| `-engine-queue-bytes` | `0` | also bound the queue by the bytes of the objects in it (0: by `-engine-queue` alone). Memory is what a queue costs, so a deep `-engine-queue` with a byte bound rides out a burst of small objects and stays bounded for large ones |
 | `-engine-retries` | `4` | retries for a failed submit before the object is dropped; `-1` disables |
+
+Every engine client (the primary, routes, shadows, the facade) shares one
+connection pool that keeps up to 256 idle connections per engine, so the
+workers reuse their connections however many there are (Go's default of 2
+closed every connection above the second after each answer).
 
 Non-zero `shed` means the engine cannot keep up. An engine that answers 4xx
 refused the object on its merits; that is counted as `engine_refused` and is

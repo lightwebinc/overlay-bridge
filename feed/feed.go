@@ -91,6 +91,13 @@ type Feed struct {
 	// The host misses that object until its own catch-up finds it, which is a
 	// real loss and is preferred to stalling every later delivery behind it.
 	QueueDepth int
+	// QueueBytes, when set, also bounds the queue by the bytes of the
+	// objects in it: a delivery that would take the queue past it is shed.
+	// Memory, not the count, is what a queue costs (a lab object is about
+	// 1 KB, a BEEF can run to megabytes), so with QueueBytes the count
+	// (QueueDepth) can be set deep enough to ride out a burst of small
+	// objects while the bytes keep the memory bounded.
+	QueueBytes int64
 	Log        *slog.Logger
 
 	// Verify is the bridge's own SPV verifier, used as VerifyMode says. Nil,
@@ -123,9 +130,10 @@ type Feed struct {
 	c    counters
 	busy busyCount
 
-	qmu     sync.Mutex
-	q       chan job
-	started atomic.Bool
+	qmu         sync.Mutex
+	q           chan job
+	queuedBytes atomic.Int64
+	started     atomic.Bool
 }
 
 // queue returns the job channel, creating it on first use under the lock so
@@ -172,6 +180,7 @@ func (f *Feed) Start(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case j := <-q:
+					f.queuedBytes.Add(-int64(len(j.object)))
 					if f.OnDequeued != nil && !j.arrived.IsZero() {
 						f.OnDequeued(time.Since(j.arrived))
 					}
@@ -303,10 +312,18 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 			return fmt.Errorf("%w: workers not started", ErrShed)
 		}
 		q := f.queue()
+		n := int64(len(owned))
+		if b := f.queuedBytes.Add(n); f.QueueBytes > 0 && b > f.QueueBytes {
+			f.queuedBytes.Add(-n)
+			f.c.addShed(f.routeName(name))
+			f.logReject("engine queue full (bytes), delivery shed", topicID, "bytes", len(owned), "queued_bytes", b-n)
+			return ErrShed
+		}
 		select {
 		case q <- job{names: names, object: owned, arrived: arrived}:
 			return nil
 		default:
+			f.queuedBytes.Add(-n)
 			f.c.addShed(f.routeName(name))
 			f.logReject("engine queue full, delivery shed", topicID, "bytes", len(owned), "depth", cap(q))
 			return ErrShed

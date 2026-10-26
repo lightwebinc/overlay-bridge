@@ -3,12 +3,15 @@ package feed
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func readFixture(t *testing.T, name string) []byte {
@@ -120,5 +123,48 @@ func TestSubmitNonOKIsAnError(t *testing.T) {
 	c := &Client{Base: srv.URL}
 	if _, err := c.Submit(context.Background(), "tm_example", []byte{0x01}); err == nil {
 		t.Fatal("a 400 was reported as success")
+	}
+}
+
+// TestSubmitsReuseConnections: concurrent submits to one engine reuse their
+// connections rather than dialling anew once more than Go's default two are
+// in flight; each concurrent submit holds at most one connection.
+func TestSubmitsReuseConnections(t *testing.T) {
+	var mu sync.Mutex
+	opened := 0
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		time.Sleep(time.Millisecond)
+		_, _ = w.Write([]byte(`{"STEAK":{"tm_a":{"outputsToAdmit":[0],"coinsToRetain":[]}}}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			mu.Lock()
+			opened++
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	c := &Client{Base: srv.URL}
+	const workers, each = 8, 50
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range each {
+				if _, err := c.Submit(context.Background(), "tm_a", []byte{1}); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if opened > workers {
+		t.Fatalf("%d connections opened for %d concurrent submitters (%d submits)", opened, workers, workers*each)
 	}
 }

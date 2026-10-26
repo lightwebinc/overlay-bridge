@@ -63,6 +63,12 @@ func (f *Feed) Backlog() (queued, capacity int) {
 	return len(q), cap(q)
 }
 
+// BacklogBytes reports the bytes of the objects queued behind the workers
+// and the queue's byte bound (-engine-queue-bytes; 0 for none).
+func (f *Feed) BacklogBytes() (queued, capacity int64) {
+	return f.queuedBytes.Load(), f.QueueBytes
+}
+
 // RouteNames lists every route's metrics label: DefaultRoute, then each
 // route's pattern in order.
 func (f *Feed) RouteNames() []string {

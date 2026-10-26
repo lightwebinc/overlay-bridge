@@ -405,6 +405,56 @@ func TestHandleShedsWhenTheQueueIsFull(t *testing.T) {
 	}
 }
 
+// TestHandleShedsPastTheQueueBytes: with a byte bound, a delivery that would
+// take the queue's bytes past it is shed although the count has room, and
+// the bytes come back as workers take objects off the queue.
+func TestHandleShedsPastTheQueueBytes(t *testing.T) {
+	sub := &slowSubmitter{release: make(chan struct{})}
+	f := &Feed{Topics: NewTopicMap([]string{"tm_example"}), Submit: sub, Workers: 1, QueueDepth: 64,
+		QueueBytes: int64(2 * len(beefObj))}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = f.Start(ctx) }()
+	for !f.started.Load() {
+		time.Sleep(time.Millisecond)
+	}
+	rec := objfmt.EncodeBEEFDelivery(objfmt.TopicID("tm_example"), beefObj)
+	// The first goes to the worker (which holds it), the next two fill the
+	// byte bound, the fourth sheds although 62 slots are free.
+	if err := f.Handle(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && sub.calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	for i := 0; i < 2; i++ {
+		if err := f.Handle(ctx, rec); err != nil {
+			t.Fatalf("handle %d: %v", i, err)
+		}
+	}
+	if err := f.Handle(ctx, rec); !errors.Is(err, ErrShed) {
+		t.Fatalf("past the byte bound: %v", err)
+	}
+	if q, c := f.BacklogBytes(); q != int64(2*len(beefObj)) || c != f.QueueBytes {
+		t.Fatalf("backlog bytes %d of %d", q, c)
+	}
+	close(sub.release)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if q, _ := f.BacklogBytes(); q == 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if q, _ := f.BacklogBytes(); q != 0 {
+		t.Fatalf("%d bytes left queued after the workers drained it", q)
+	}
+	if f.Stats().Shed != 1 {
+		t.Fatalf("stats = %+v, want one shed", f.Stats())
+	}
+}
+
 // TestHandleRecordPayloadLandsOnEveryElectedName covers the record-carrying
 // delivery: the plane delivered once, under the first elected topic it
 // matched, with every name the publisher wrote in the payload. The feed

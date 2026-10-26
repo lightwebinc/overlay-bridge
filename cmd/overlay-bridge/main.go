@@ -54,6 +54,7 @@ type config struct {
 	engineTimeout time.Duration
 	engineWorkers int
 	engineQueue   int
+	engineQBytes  int64
 	submitRetries int
 	maxObject     int
 
@@ -107,6 +108,7 @@ func main() {
 	flag.DurationVar(&c.engineTimeout, "engine-timeout", 30*time.Second, "per-submit ceiling")
 	flag.IntVar(&c.engineWorkers, "engine-workers", 4, "concurrent engine submits; the lane never waits on the engine")
 	flag.IntVar(&c.engineQueue, "engine-queue", 256, "deliveries queued behind the workers; a full queue sheds")
+	flag.Int64Var(&c.engineQBytes, "engine-queue-bytes", 0, "also bound the engine queue by the bytes queued (0 = by -engine-queue alone); past it a delivery is shed")
 	flag.IntVar(&c.submitRetries, "engine-retries", 4, "retries for a failed engine submit before the object is DROPPED; -1 disables")
 	flag.IntVar(&c.maxObject, "max-object", 0, "object-byte ceiling; 0 = codec default (64 MiB)")
 	flag.StringVar(&c.facadeListen, "facade-listen", "[::]:9175", "the client-facing BRC-22 /submit listener; empty = off")
@@ -188,6 +190,7 @@ func run(c config, log *slog.Logger) error {
 		MaxObject:     c.maxObject,
 		Workers:       c.engineWorkers,
 		QueueDepth:    c.engineQueue,
+		QueueBytes:    c.engineQBytes,
 		SubmitRetries: c.submitRetries,
 		Log:           log,
 		VerifyMode:    vmode,
@@ -426,6 +429,9 @@ func (c config) validate() error {
 	}
 	if c.shadowFacade && c.shadowEngine == "" && !c.engineRoutes.anyShadow() {
 		return errors.New("-shadow-facade needs a shadow to offer to: set -shadow-engine or a route with shadow=")
+	}
+	if c.engineQBytes < 0 {
+		return errors.New("-engine-queue-bytes must be 0 (no byte bound) or more")
 	}
 	if _, err := feed.ParseVerifyMode(c.verifyMode); err != nil {
 		return fmt.Errorf("-verify: %w", err)

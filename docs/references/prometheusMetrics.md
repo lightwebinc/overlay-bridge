@@ -41,6 +41,8 @@ With `-pprof-listen` set, `net/http/pprof` is served on that loopback address
 | `overlay_bridge_shadow_queue_capacity` | Gauge | `route` | Size of a shadow's queue (`-shadow-queue`) |
 | `overlay_bridge_engine_queue_depth` | Gauge | none | Deliveries queued behind the engine workers right now. At `overlay_bridge_engine_queue_capacity` the next delivery is shed |
 | `overlay_bridge_engine_queue_capacity` | Gauge | none | Size of the engine queue (`-engine-queue`) |
+| `overlay_bridge_engine_queue_bytes` | Gauge | none | Bytes of the deliveries queued behind the engine workers right now |
+| `overlay_bridge_engine_queue_bytes_capacity` | Gauge | none | The queue's byte bound (`-engine-queue-bytes`); 0 is none. Past it the next delivery is shed |
 | `overlay_bridge_engine_queue_wait_seconds` | Histogram | none | Lane arrival to a worker taking the object off the queue: how long a delivery waited for a free worker. Buckets 10 us to 30 s |
 | `overlay_bridge_engine_workers` | Gauge | none | Engine workers configured (`-engine-workers`) |
 | `overlay_bridge_engine_workers_busy` | Gauge | `route` (`default` = `-engine`, else the `-engine-route` glob); `stage` = `verify`, `submit` | Workers busy right now: running the bridge's SPV (`verify`, under the route of the topic the object was delivered under) or waiting on that route's engine (`submit`, retries and backoff included). `overlay_bridge_engine_workers` minus the sum is idle. Preset at zero for every route and stage |

@@ -90,6 +90,10 @@ var (
 		"Deliveries queued behind the engine workers right now. At overlay_bridge_engine_queue_capacity the next delivery is shed.", nil, nil)
 	descEngineQueueCap = prometheus.NewDesc("overlay_bridge_engine_queue_capacity",
 		"Size of the engine queue (-engine-queue).", nil, nil)
+	descEngineQueueBytes = prometheus.NewDesc("overlay_bridge_engine_queue_bytes",
+		"Bytes of the deliveries queued behind the engine workers right now.", nil, nil)
+	descEngineQueueBytesCap = prometheus.NewDesc("overlay_bridge_engine_queue_bytes_capacity",
+		"The engine queue's byte bound (-engine-queue-bytes); 0 is none. Past it the next delivery is shed.", nil, nil)
 	descWorkers = prometheus.NewDesc("overlay_bridge_engine_workers",
 		"Engine workers configured (-engine-workers).", nil, nil)
 	descWorkersBusy = prometheus.NewDesc("overlay_bridge_engine_workers_busy",
@@ -113,7 +117,7 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 		descFeed, descSteak, descHeaders, descTip, descRoots, descFacade,
 		descQueue, descQueueDepth, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
 		descBuild, descVerifyScripts, descMismatch, descShadow, descWarm, descWarmDuration, descConfig,
-		descEngineQueue, descEngineQueueCap, descWorkers, descWorkersBusy, descShedRoute, descShadowQueue, descShadowQueueCap,
+		descEngineQueue, descEngineQueueCap, descEngineQueueBytes, descEngineQueueBytesCap, descWorkers, descWorkersBusy, descShedRoute, descShadowQueue, descShadowQueueCap,
 	} {
 		ch <- d
 	}
@@ -232,6 +236,9 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 			queued, capacity := f.Backlog()
 			gauge(ch, descEngineQueue, float64(queued))
 			gauge(ch, descEngineQueueCap, float64(capacity))
+			qb, qbCap := f.BacklogBytes()
+			gauge(ch, descEngineQueueBytes, float64(qb))
+			gauge(ch, descEngineQueueBytesCap, float64(qbCap))
 			gauge(ch, descWorkers, float64(f.Workers))
 			busy := f.Busy()
 			for _, route := range f.RouteNames() {

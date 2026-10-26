@@ -111,8 +111,26 @@ func (c *Client) httpClient() *http.Client {
 	if t == 0 {
 		t = 30 * time.Second
 	}
-	return &http.Client{Timeout: t}
+	return &http.Client{Timeout: t, Transport: engineTransport}
 }
+
+// IdleConnsPerEngine is how many idle connections the submit clients keep
+// to one engine. Go's default transport keeps 2, so with more concurrent
+// submits than that (the feed's workers, the shadows', the facade's) a
+// connection closed after every answer above the second and the next
+// submit dialled anew: a TCP setup and an engine-side connection per
+// object at load. The pool only grows to the concurrency actually used.
+const IdleConnsPerEngine = 256
+
+// engineTransport is the one transport every Client without its own HTTP
+// shares, so connections to one engine pool together whichever route or
+// shadow uses them.
+var engineTransport = func() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConnsPerHost = IdleConnsPerEngine
+	tr.MaxIdleConns = 4 * IdleConnsPerEngine
+	return tr
+}()
 
 // Submit posts one object to one topic and returns the engine's admittance
 // instructions.
