@@ -225,6 +225,10 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 			f.logf("facade: not publishing an object already seen", "topic", name)
 			continue
 		}
+		// The route's other local targets get what the primary accepted: the
+		// plane does not deliver this host's own publications back to it
+		// (own-traffic exclusion), so this hand-off is their delivery.
+		feed.RouteFor(f.cfg.Routes, name).OfferAlso(name, object)
 		if f.cfg.Publish == nil {
 			continue
 		}

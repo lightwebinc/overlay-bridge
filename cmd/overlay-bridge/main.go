@@ -49,6 +49,9 @@ type config struct {
 	shadowEngine  string
 	shadowWorkers int
 	shadowQueue   int
+	alsoWorkers   int
+	alsoQueue     int
+	alsoBytes     int64
 	shadowFacade  bool
 	engineRoutes  routeFlags
 	engineTimeout time.Duration
@@ -103,6 +106,9 @@ func main() {
 	flag.StringVar(&c.shadowEngine, "shadow-engine", "", "a second BRC-22 submit base fed every object the primary is fed, asynchronously, and compared per topic; empty = off")
 	flag.IntVar(&c.shadowWorkers, "shadow-workers", 2, "concurrent shadow submits")
 	flag.IntVar(&c.shadowQueue, "shadow-queue", 1024, "objects queued for the shadow; a full queue drops, never blocks the primary")
+	flag.IntVar(&c.alsoWorkers, "also-workers", 2, "concurrent submits to each also= route target")
+	flag.IntVar(&c.alsoQueue, "also-queue", 1024, "objects queued for each also= route target; a full queue sheds, never blocks the primary")
+	flag.Int64Var(&c.alsoBytes, "also-queue-bytes", 256<<20, "bytes queued or in flight for each also= route target; past it the next object is shed")
 	flag.BoolVar(&c.shadowFacade, "shadow-facade", false, "also offer the facade's accepted submissions to the topic's shadow, so the publishing host counts parity on what it publishes")
 	flag.Var(&c.engineRoutes, "engine-route", "GLOB=PRIMARY[,shadow=SHADOW]: the topics GLOB names submit to PRIMARY (a bare origin) with SHADOW as their shadow, instead of -engine and -shadow-engine; repeatable, first match wins")
 	flag.DurationVar(&c.engineTimeout, "engine-timeout", 30*time.Second, "per-submit ceiling")
@@ -227,17 +233,28 @@ func run(c config, log *slog.Logger) error {
 		log.Info("shadow engine", "base", c.shadowEngine, "workers", c.shadowWorkers, "queue", c.shadowQueue)
 	}
 	if submitter != nil {
-		for _, rs := range c.engineRoutes {
-			pattern, primary, shadow, _ := feed.ParseRoute(rs) // validated above
+		for _, s := range c.engineRoutes {
+			rs, _ := feed.ParseRouteSpec(s) // validated above
 			r := &feed.Route{
-				Pattern: pattern,
-				Submit:  &feed.Client{Base: primary, Timeout: c.engineTimeout, Log: log},
+				Pattern: rs.Pattern,
+				Submit:  &feed.Client{Base: rs.Primary, Timeout: c.engineTimeout, Log: log},
 			}
-			if shadow != "" {
-				r.Shadow = newShadow(shadow, pattern)
+			if rs.Shadow != "" {
+				r.Shadow = newShadow(rs.Shadow, rs.Pattern)
+			}
+			for _, a := range rs.Also {
+				r.Also = append(r.Also, &feed.Also{
+					Submit:     &feed.Client{Base: a, Timeout: c.engineTimeout, Log: log},
+					Name:       rs.Pattern,
+					Target:     a,
+					Workers:    c.alsoWorkers,
+					QueueDepth: c.alsoQueue,
+					QueueBytes: c.alsoBytes,
+					Log:        log,
+				})
 			}
 			f.Routes = append(f.Routes, r)
-			log.Info("engine route", "topics", pattern, "primary", primary, "shadow", shadow)
+			log.Info("engine route", "topics", rs.Pattern, "primary", rs.Primary, "shadow", rs.Shadow, "also", strings.Join(rs.Also, " "))
 		}
 	}
 	if c.shadowFacade {
@@ -275,6 +292,9 @@ func run(c config, log *slog.Logger) error {
 	}
 	for _, sh := range shadows(f) {
 		tasks.go_("shadow-workers:"+sh.Name, sh.Start)
+	}
+	for _, a := range alsos(f) {
+		tasks.go_("also-workers:"+a.Name+">"+a.Target, a.Start)
 	}
 
 	var fac *facade.Facade
@@ -433,6 +453,9 @@ func (c config) validate() error {
 	if c.engineQBytes < 0 {
 		return errors.New("-engine-queue-bytes must be 0 (no byte bound) or more")
 	}
+	if c.alsoWorkers < 0 || c.alsoQueue < 0 || c.alsoBytes < 0 {
+		return errors.New("-also-workers, -also-queue and -also-queue-bytes must not be negative (0 takes the default)")
+	}
 	if _, err := feed.ParseVerifyMode(c.verifyMode); err != nil {
 		return fmt.Errorf("-verify: %w", err)
 	}
@@ -585,6 +608,15 @@ func (r routeFlags) anyShadow() bool {
 		}
 	}
 	return false
+}
+
+// alsos lists every route's also targets, in route order.
+func alsos(f *feed.Feed) []*feed.Also {
+	var out []*feed.Also
+	for _, r := range f.Routes {
+		out = append(out, r.Also...)
+	}
+	return out
 }
 
 // shadows lists every shadow the feed runs: the default, then each route's.

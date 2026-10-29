@@ -39,6 +39,13 @@ func TestValidate(t *testing.T) {
 			c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280,shadow=http://host:8080"}
 		}, ""},
 		{"a route without a shadow", func(c *config) { c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280"} }, ""},
+		{"a route with an also target", func(c *config) {
+			c.engineRoutes = routeFlags{"tm_bstore_*=http://host:8280,also=http://host:8095"}
+		}, ""},
+		{"an also target that is the primary", func(c *config) {
+			c.engineRoutes = routeFlags{"tm_bstore_*=http://host:8280,also=http://host:8280"}
+		}, "-engine-route"},
+		{"a negative also queue", func(c *config) { c.alsoBytes = -1 }, "must not be negative"},
 		{"a malformed route", func(c *config) { c.engineRoutes = routeFlags{"tm_bsecret_*"} }, "-engine-route"},
 		{"a route whose shadow is its primary", func(c *config) {
 			c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280,shadow=http://host:8280"}

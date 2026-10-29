@@ -66,7 +66,10 @@ The shadow uses `-engine-timeout` for its submits and makes no retries.
 
 | Flag | Default | Notes |
 | --- | --- | --- |
-| `-engine-route` | (none) | `GLOB=PRIMARY[,shadow=SHADOW]`: the topics the glob names submit to `PRIMARY`, with `SHADOW` as their shadow, instead of `-engine` and `-shadow-engine`. Repeatable; the first matching route wins. Both are bare origins like `-engine`, and the shadow may not be the primary. See [routes](shadow.md#routes) |
+| `-engine-route` | (none) | `GLOB=PRIMARY[,shadow=SHADOW][,also=TARGET]...`: the topics the glob names submit to `PRIMARY`, with `SHADOW` as their shadow, instead of `-engine` and `-shadow-engine`, and each object is also handed to every `TARGET`. Repeatable; the first matching route wins. All are bare origins like `-engine`; the shadow may not be the primary, and an also target may be neither. See [routes](shadow.md#routes) and [also targets](also.md) |
+| `-also-workers` | `2` | concurrent submits to each also target |
+| `-also-queue` | `1024` | objects queued for each also target. A full queue sheds the object (`shed`); it never blocks the primary |
+| `-also-queue-bytes` | `268435456` | bytes queued for, or in the hands of, each also target's workers. Past it the next object is shed |
 
 A route moves one application's topics to another engine while every other
 topic stays where it is: the shape of a per-application cutover, with the

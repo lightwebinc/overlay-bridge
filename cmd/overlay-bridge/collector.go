@@ -107,6 +107,14 @@ var (
 		[]string{"route"}, nil)
 	descShadowQueueCap = prometheus.NewDesc("overlay_bridge_shadow_queue_capacity",
 		"Size of a shadow engine's queue (-shadow-queue), by route.", []string{"route"}, nil)
+	descAlso = prometheus.NewDesc("overlay_bridge_also_total",
+		"Objects handed to a route's also= target (the site's other local subscriber), by route glob, target origin and result: ok | refused (a 4xx; not asked again) | error (failed or unreachable on every try) | shed (queue full by count or bytes; never offered).",
+		[]string{"route", "target", "result"}, nil)
+	descAlsoQueue = prometheus.NewDesc("overlay_bridge_also_queue_bytes",
+		"Bytes queued for, or in the hands of, an also= target's workers right now. Past overlay_bridge_also_queue_bytes_capacity the next object is shed.",
+		[]string{"route", "target"}, nil)
+	descAlsoQueueCap = prometheus.NewDesc("overlay_bridge_also_queue_bytes_capacity",
+		"An also= target's byte bound (-also-queue-bytes).", []string{"route", "target"}, nil)
 	descConfig = prometheus.NewDesc("overlay_bridge_config_info",
 		"Always 1. Labels carry the run settings a measurement must be stamped with (R7): verify mode, network and finality, engine workers, GOMAXPROCS, GOGC, GOMEMLIMIT and the ECDSA verifier (-sig-verifier).",
 		[]string{"verify", "verify_network", "verify_finality", "engine_workers", "gomaxprocs", "gogc", "gomemlimit", "sig_verifier"}, nil)
@@ -118,6 +126,7 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 		descQueue, descQueueDepth, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
 		descBuild, descVerifyScripts, descMismatch, descShadow, descWarm, descWarmDuration, descConfig,
 		descEngineQueue, descEngineQueueCap, descEngineQueueBytes, descEngineQueueBytesCap, descWorkers, descWorkersBusy, descShedRoute, descShadowQueue, descShadowQueueCap,
+		descAlso, descAlsoQueue, descAlsoQueueCap,
 	} {
 		ch <- d
 	}
@@ -228,6 +237,14 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 			queued, capacity := sh.Backlog()
 			gauge(ch, descShadowQueue, float64(queued), sh.Name)
 			gauge(ch, descShadowQueueCap, float64(capacity), sh.Name)
+		}
+		for _, a := range alsos(f) {
+			as := a.Stats()
+			for _, r := range feed.AlsoResults {
+				counter(ch, descAlso, as.Results[r], a.Name, a.Target, r)
+			}
+			gauge(ch, descAlsoQueue, float64(as.QueuedBytes), a.Name, a.Target)
+			gauge(ch, descAlsoQueueCap, float64(as.CapacityBytes), a.Name, a.Target)
 		}
 		if f.Submit != nil {
 			// Where the workers' time goes: the queue in front of them, and

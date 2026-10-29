@@ -39,6 +39,9 @@ With `-pprof-listen` set, `net/http/pprof` is served on that loopback address
 | `overlay_bridge_shadow_submit_duration_seconds` | Histogram | `route`; `result` = `ok`, `error` | One submit to a shadow engine |
 | `overlay_bridge_shadow_queue_depth` | Gauge | `route` | Topic submits queued for a shadow engine right now. At `overlay_bridge_shadow_queue_capacity` the next offer is dropped (`shadow_dropped`) |
 | `overlay_bridge_shadow_queue_capacity` | Gauge | `route` | Size of a shadow's queue (`-shadow-queue`) |
+| `overlay_bridge_also_total` | Counter | `route` (the `-engine-route` glob), `target` (the also target's origin); `result` = `ok`, `refused`, `error`, `shed` | Objects handed to a route's also target. Preset at zero. Present only with an also target configured. See [also targets](../also.md) |
+| `overlay_bridge_also_queue_bytes` | Gauge | `route`, `target` | Bytes queued for, or in the hands of, an also target's workers right now. Past `overlay_bridge_also_queue_bytes_capacity` the next object is shed |
+| `overlay_bridge_also_queue_bytes_capacity` | Gauge | `route`, `target` | An also target's byte bound (`-also-queue-bytes`) |
 | `overlay_bridge_engine_queue_depth` | Gauge | none | Deliveries queued behind the engine workers right now. At `overlay_bridge_engine_queue_capacity` the next delivery is shed |
 | `overlay_bridge_engine_queue_capacity` | Gauge | none | Size of the engine queue (`-engine-queue`) |
 | `overlay_bridge_engine_queue_bytes` | Gauge | none | Bytes of the deliveries queued behind the engine workers right now |

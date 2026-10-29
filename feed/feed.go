@@ -370,6 +370,9 @@ func (f *Feed) submitBackoff() time.Duration {
 // marker, when not empty, is the SPV trust marker for this object.
 func (f *Feed) submitOne(ctx context.Context, name string, object []byte, marker string, arrived time.Time) error {
 	defer f.busy.enter(f.routeName(name), StageSubmit)()
+	// The route's other local targets get the object whatever the primary
+	// answers: each is a subscriber of its own behind the same lane.
+	RouteFor(f.Routes, name).OfferAlso(name, object)
 	retries := f.submitRetries()
 	backoff := f.submitBackoff()
 	engine, shadow := f.enginesFor(name)
