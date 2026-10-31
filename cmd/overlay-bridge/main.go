@@ -57,6 +57,7 @@ type config struct {
 	engineTimeout time.Duration
 	engineWorkers int
 	engineQueue   int
+	stopDrain     time.Duration
 	engineQBytes  int64
 	submitRetries int
 	maxObject     int
@@ -114,6 +115,7 @@ func main() {
 	flag.DurationVar(&c.engineTimeout, "engine-timeout", 30*time.Second, "per-submit ceiling")
 	flag.IntVar(&c.engineWorkers, "engine-workers", 4, "concurrent engine submits; the lane never waits on the engine")
 	flag.IntVar(&c.engineQueue, "engine-queue", 256, "deliveries queued behind the workers; a full queue sheds")
+	flag.DurationVar(&c.stopDrain, "stop-drain", feed.DefaultStopDrain, "at stop, how long the workers keep submitting what is already queued (the unit's stop timeout must exceed it)")
 	flag.Int64Var(&c.engineQBytes, "engine-queue-bytes", 0, "also bound the engine queue by the bytes queued (0 = by -engine-queue alone); past it a delivery is shed")
 	flag.IntVar(&c.submitRetries, "engine-retries", 4, "retries for a failed engine submit before the object is DROPPED; -1 disables")
 	flag.IntVar(&c.maxObject, "max-object", 0, "object-byte ceiling; 0 = codec default (64 MiB)")
@@ -197,6 +199,7 @@ func run(c config, log *slog.Logger) error {
 		Workers:       c.engineWorkers,
 		QueueDepth:    c.engineQueue,
 		QueueBytes:    c.engineQBytes,
+		StopDrain:     c.stopDrain,
 		SubmitRetries: c.submitRetries,
 		Log:           log,
 		VerifyMode:    vmode,

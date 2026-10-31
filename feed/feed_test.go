@@ -505,3 +505,70 @@ func TestHandleRecordPayloadLandsOnEveryElectedName(t *testing.T) {
 		t.Fatal("trailing byte after the record accepted")
 	}
 }
+
+// TestStopDrainsTheQueue: cancelling Start's context does not abandon what
+// the lane already delivered; the workers submit the queue first.
+func TestStopDrainsTheQueue(t *testing.T) {
+	var calls atomic.Int64
+	sub := &stubSubmitterFunc{fn: func(ctx context.Context, topic string, _ []byte) (overlay.Steak, error) {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		time.Sleep(5 * time.Millisecond)
+		calls.Add(1)
+		return admitted(topic), nil
+	}}
+	f := &Feed{Topics: NewTopicMap([]string{"tm_example"}), Submit: sub, Workers: 1, QueueDepth: 64, StopDrain: 5 * time.Second}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = f.Start(ctx); close(done) }()
+	for !f.started.Load() {
+		time.Sleep(time.Millisecond)
+	}
+	rec := objfmt.EncodeBEEFDelivery(objfmt.TopicID("tm_example"), beefObj)
+	const n = 20
+	for i := 0; i < n; i++ {
+		if err := f.Handle(ctx, rec); err != nil {
+			t.Fatalf("handle %d: %v", i, err)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Start did not return")
+	}
+	if got := calls.Load(); got != n {
+		t.Fatalf("submitted %d of %d queued objects at stop", got, n)
+	}
+}
+
+// TestStopDrainIsBounded: a stalled engine does not hold the stop past the
+// drain allowance.
+func TestStopDrainIsBounded(t *testing.T) {
+	sub := &slowSubmitter{release: make(chan struct{})}
+	defer close(sub.release)
+	f := &Feed{Topics: NewTopicMap([]string{"tm_example"}), Submit: sub, Workers: 1, QueueDepth: 64, StopDrain: 200 * time.Millisecond, SubmitRetries: 0}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = f.Start(ctx); close(done) }()
+	for !f.started.Load() {
+		time.Sleep(time.Millisecond)
+	}
+	rec := objfmt.EncodeBEEFDelivery(objfmt.TopicID("tm_example"), beefObj)
+	for i := 0; i < 4; i++ {
+		if err := f.Handle(ctx, rec); err != nil {
+			t.Fatalf("handle %d: %v", i, err)
+		}
+	}
+	t0 := time.Now()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return: the drain is unbounded")
+	}
+	if time.Since(t0) > 2*time.Second {
+		t.Fatalf("stop took %s with a stalled engine", time.Since(t0))
+	}
+}

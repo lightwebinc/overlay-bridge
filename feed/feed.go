@@ -127,6 +127,12 @@ type Feed struct {
 	// Shadow. See Route.
 	Routes []*Route
 
+	// StopDrain bounds how long the workers keep submitting what is already
+	// queued once Start's context is cancelled (0 = DefaultStopDrain).
+	// Without a drain a restart dropped every queued object: the lane had
+	// delivered them, so nothing upstream sends them again.
+	StopDrain time.Duration
+
 	c    counters
 	busy busyCount
 
@@ -160,8 +166,13 @@ type job struct {
 // ErrShed reports a delivery refused because the engine queue was full.
 var ErrShed = errors.New("feed: engine queue full, delivery shed")
 
-// Start runs the workers until ctx is cancelled. It must be called when
-// Workers is set; Handle refuses deliveries until it has.
+// DefaultStopDrain is the drain allowed at stop when StopDrain is 0.
+const DefaultStopDrain = 30 * time.Second
+
+// Start runs the workers until ctx is cancelled, then drains: every object
+// already queued is still submitted, on a context that outlives ctx by at
+// most StopDrain, before Start returns. It must be called when Workers is
+// set; Handle refuses deliveries until it has.
 func (f *Feed) Start(ctx context.Context) error {
 	if f.Workers <= 0 {
 		<-ctx.Done()
@@ -170,6 +181,12 @@ func (f *Feed) Start(ctx context.Context) error {
 	q := f.queue()
 	f.started.Store(true)
 	defer f.started.Store(false)
+	// Submits never ride the run context: cancelling it mid-submit turned
+	// an object the lane had delivered into "engine submit failed, object
+	// DROPPED". They ride one that ends StopDrain after the run context.
+	sctx, scancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer scancel()
+	var drained atomic.Int64
 	var wg sync.WaitGroup
 	for i := 0; i < f.Workers; i++ {
 		wg.Add(1)
@@ -178,20 +195,42 @@ func (f *Feed) Start(ctx context.Context) error {
 			for {
 				select {
 				case <-ctx.Done():
-					return
-				case j := <-q:
-					f.queuedBytes.Add(-int64(len(j.object)))
-					if f.OnDequeued != nil && !j.arrived.IsZero() {
-						f.OnDequeued(time.Since(j.arrived))
+					for {
+						select {
+						case j := <-q:
+							drained.Add(1)
+							f.take(sctx, j)
+						default:
+							return
+						}
 					}
-					_ = f.process(ctx, j)
+				case j := <-q:
+					f.take(sctx, j)
 				}
 			}
 		}()
 	}
 	<-ctx.Done()
+	drain := f.StopDrain
+	if drain <= 0 {
+		drain = DefaultStopDrain
+	}
+	timer := time.AfterFunc(drain, scancel)
 	wg.Wait()
+	timer.Stop()
+	if n := drained.Load(); n > 0 && f.Log != nil {
+		f.Log.Info("feed: stopped after draining the engine queue", "objects", n, "cut_short", sctx.Err() != nil)
+	}
 	return ctx.Err()
+}
+
+// take submits one queued job.
+func (f *Feed) take(ctx context.Context, j job) {
+	f.queuedBytes.Add(-int64(len(j.object)))
+	if f.OnDequeued != nil && !j.arrived.IsZero() {
+		f.OnDequeued(time.Since(j.arrived))
+	}
+	_ = f.process(ctx, j)
 }
 
 // NewTopicMap builds the identifier map from elected topic names.
