@@ -68,6 +68,26 @@ func (s *sink) waitDials(t *testing.T, n int) {
 	t.Fatalf("connections = %d, want %d", s.dials(), n)
 }
 
+// waitBytes waits for the sink's readers to have delivered n bytes. A reader
+// appends only at EOF, after the client closes its connection, so summing
+// s.got right after Close is a race with those goroutines.
+func (s *sink) waitBytes(t *testing.T, n int) int {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		total := 0
+		for _, b := range s.got {
+			total += len(b)
+		}
+		s.mu.Unlock()
+		if total >= n || time.Now().After(deadline) {
+			return total
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestSubmitWritesWholeRecord(t *testing.T) {
 	s := newSink(t)
 	defer s.close()
@@ -334,13 +354,7 @@ func TestQueueLanesShareTheWork(t *testing.T) {
 	cancel()
 	<-done
 	_ = q.Close()
-	s.mu.Lock()
-	total := 0
-	for _, b := range s.got {
-		total += len(b)
-	}
-	s.mu.Unlock()
-	if total != 3*n {
+	if total := s.waitBytes(t, 3*n); total != 3*n {
 		t.Fatalf("sink got %d bytes, want %d", total, 3*n)
 	}
 }
