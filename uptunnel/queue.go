@@ -160,9 +160,6 @@ func (q *Queue) Run(ctx context.Context) error {
 
 // lane sends the queue's records down one client until ctx ends.
 func (q *Queue) lane(ctx context.Context, c *Client) {
-	if err := c.Connect(ctx); err != nil && q.log != nil {
-		q.log.Warn("up-tunnel lane not connected yet; the first record dials again", "err", err)
-	}
 	for {
 		select {
 		case <-ctx.Done():

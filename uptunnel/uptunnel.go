@@ -254,15 +254,6 @@ func (c *Client) Send(ctx context.Context, b []byte, done func(confirmed bool)) 
 	return nil
 }
 
-// Connect opens the connection ahead of the first record, so a lane is
-// up (and counted) when its queue starts rather than when its first record
-// arrives. A failure is not final: the first Send dials again.
-func (c *Client) Connect(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.ensureConnLocked(ctx)
-}
-
 // Poll confirms acknowledged records, notices a connection the peer has
 // closed, and resends what that connection left unconfirmed.
 func (c *Client) Poll(ctx context.Context) {
