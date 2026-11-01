@@ -33,7 +33,7 @@ type Queue struct {
 	// cs are the lanes: one connection each, every one a sender on the one
 	// queue. With one lane (the default) records leave in queue order; with
 	// more, whichever lane is free takes the next record, so the edge
-	// dispatches records concurrently (experiment, 2026-11-01).
+	// dispatches records concurrently.
 	cs  []*Client
 	ch  chan item
 	log *slog.Logger

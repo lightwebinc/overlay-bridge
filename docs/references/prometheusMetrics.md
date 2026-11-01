@@ -2,7 +2,8 @@
 
 Every series is `overlay_bridge_*`, served on `-metrics-addr` (default `[::]:9179`)
 at `/metrics` from a dedicated registry, so no Go runtime or process collectors
-are exported. All values are read from component counters at scrape time.
+are exported. Counters and gauges are read from component counters at scrape
+time; histograms are observed as the events happen.
 
 ## Metric types
 
@@ -10,6 +11,7 @@ are exported. All values are read from component counters at scrape time.
 |------|-------------|
 | Counter | Monotonic; only increases or resets to zero on restart. Always suffixed `_total`. |
 | Gauge | A value that can go up and down: a level, a height, or a state. |
+| Histogram | Observations in buckets, with `_bucket`, `_sum` and `_count` series. |
 
 ## Endpoints
 
@@ -32,7 +34,7 @@ With `-pprof-listen` set, `net/http/pprof` is served on that loopback address
 | `overlay_bridge_feed_total` | Counter | `outcome` = `submitted`, `engine_error`, `parse_error`, `unknown_topic`, `rejected`, `sunk`, `shed`, `retried`, `engine_refused` (engine 4xx, not retried), `spv_refused` (enforce mode: not submitted) | Delivery records handled by the feed. |
 | `overlay_bridge_verify_duration_seconds` | Histogram | `result` = `ok`, `refused`, `error` | One SPV verification by the bridge (go-sdk). Buckets 0.0001 to 0.1 s, as the engine's `overlay_host_verify_duration_seconds`. Present only with `-verify` on. See [SPV](../spv.md) |
 | `overlay_bridge_verify_scripts_total` | Counter | | Input scripts the verifier ran |
-| `overlay_bridge_verify_object_txs`, `_inputs`, `_scripts`, `_proofs`, `_ancestor_depth` | Histogram | none | Per-object work (R2), observed once per verified object: transactions, inputs across all of them, input scripts run, transactions carrying a merkle path, and the longest chain of in-object parents (1 = child of a proven parent). `_sum / _count` is the mean per object; divide a CPU rate by `rate(..._count)` for CPU per object, or by `rate(..._scripts_sum)` for CPU per script |
+| `overlay_bridge_verify_object_txs`, `_inputs`, `_scripts`, `_proofs`, `_ancestor_depth` | Histogram | none | Per-object work, observed once per verified object: transactions, inputs across all of them, input scripts run, transactions carrying a merkle path, and the longest chain of in-object parents (1 = child of a proven parent). `_sum / _count` is the mean per object; divide a CPU rate by `rate(..._count)` for CPU per object, or by `rate(..._scripts_sum)` for CPU per script |
 | `overlay_bridge_verify_mismatch_total` | Counter | `kind` = `bridge_ok_engine_refused`, `bridge_refused_engine_ok` | Shadow-mode disagreements with the engine. `bridge_ok_engine_refused` must be zero before enforce |
 | `overlay_bridge_engine_submit_duration_seconds` | Histogram | `outcome` = `admitted`, `empty`, `error`, `refused`, `engine_error` | Lane arrival to the engine's answer, per topic submit |
 | `overlay_bridge_shadow_total` | Counter | `route` (`default` = `-shadow-engine`, else the `-engine-route` glob); `kind` = `match`, `primary_only`, `shadow_only`, `differ`, `shadow_error`, `shadow_dropped` | Topic submits offered to a shadow engine, by comparison with the primary's answer. Preset at zero. Present only with a shadow configured. See [the shadow engine](../shadow.md) |
@@ -56,7 +58,7 @@ With `-pprof-listen` set, `net/http/pprof` is served on that loopback address
 | `overlay_bridge_tracker_roots_total` | Counter | `source` = `lane`, `history`, `fallback`, `miss` | Chain-tracker roots answered, by source: `lane` = a header received on this host's lane; `history` = the anchor's answer for a height the lane could not have carried to this process (at or below the startup anchor, or pruned out of `-header-window`); `fallback` = the anchor's answer for a height above the startup anchor that the lane did not deliver; `miss` = no answer. Every source is present from startup. See [provenance](../header-feeder.md#provenance-is-counted) |
 | `overlay_bridge_header_warm_heights` | Gauge | `state` = `target`, `loaded`, `failed` | Startup warm-up (`-header-warm`): heights it set out to load from the anchor, loaded, and not answered (those load on first use). `loaded / target` is its progress. |
 | `overlay_bridge_header_warm_duration_seconds` | Gauge | none | Wall time of the warm-up; 0 when it is off. |
-| `overlay_bridge_config_info` | Gauge | `verify`, `verify_network`, `verify_finality`, `engine_workers`, `gomaxprocs`, `gogc`, `gomemlimit`, `sig_verifier` | Always 1. The run settings a measurement is stamped with (R7); `sig_verifier` is `-sig-verifier`. |
+| `overlay_bridge_config_info` | Gauge | `verify`, `verify_network`, `verify_finality`, `engine_workers`, `gomaxprocs`, `gogc`, `gomemlimit`, `sig_verifier` | Always 1. The run settings a measurement is stamped with; `sig_verifier` is `-sig-verifier`. |
 | `overlay_bridge_facade_total` | Counter | `result` = `ok`, `malformed`, `unknown_topic`, `loop_dropped`, `engine_error`, `publish_failed` | Submit-facade submissions. |
 | `overlay_bridge_publish_total` | Counter | `result` = `enqueued`, `sent`, `resent`, `shed`, `failed` | Up-tunnel publications. `sent` is confirmed by the ingress (acknowledged, and the connection stayed up through the grace window), never just written locally. `resent` counts records written again after the connection they were on died. `failed` counts records not written to either address and records lost after their resends. A shed record is not on the plane. |
 | `overlay_bridge_publish_queue_depth` | Gauge | none | Instantaneous publish backlog. |

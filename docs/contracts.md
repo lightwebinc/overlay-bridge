@@ -59,7 +59,7 @@ fabric ingress drops a second identical submission in flight.
 Two limits on the above. The stock-host run used an advertiser stub that
 advertises nothing, so its propagation half is proven and its advertisement
 half is not. And the probe objects collapsed to one identity inside both
-engines, so propagation behaviour is proven once rather than repeatedly.
+engines, so propagation behavior is proven once rather than repeatedly.
 
 ## The header read API
 

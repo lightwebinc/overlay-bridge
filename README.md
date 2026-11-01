@@ -72,7 +72,7 @@ public packages, never forked.
 
 ```bash
 go build ./cmd/overlay-bridge
-make verify        # what CI runs: formatting, vet, tests under -race, licence freshness
+make verify        # what CI runs: formatting, vet, tests under -race, license freshness
 ```
 
 ## Quick start
@@ -84,7 +84,7 @@ make verify        # what CI runs: formatting, vet, tests under -race, licence f
 
 # Feed with SPV in the bridge, shadowing the engine's own verification.
 ./overlay-bridge -mode feed -engine http://127.0.0.1:8080 -topics tm_example \
-  -header-anchor http://127.0.0.1:9188 -verify shadow
+  -header-anchor http://192.0.2.10:9178 -verify shadow
 ```
 
 Feed and full (facade plus publish) examples, every flag and the default ports
@@ -102,7 +102,8 @@ are in [docs/configuration.md](docs/configuration.md).
 ├── guard/               # the bounded loop guard on object identity
 ├── topics/              # elected topic names and their identifiers
 ├── pkg/spv/             # SPV verifier and trust marker, reusable by a Go overlay engine
-├── docs/                # architecture, configuration, contracts, deliver-once, header-feeder, references/
+├── pkg/secpverify/      # the secp256k1 ECDSA verifier behind go-sdk's hooks (-sig-verifier)
+├── docs/                # architecture, configuration, spv, shadow, also, header-feeder, deliver-once, contracts, references/
 ├── Dockerfile
 ├── Makefile
 └── .github/workflows/{ci,codeql,image-publish,release,vuln}.yml
@@ -129,8 +130,8 @@ Releases and notes live on [GitHub Releases](https://github.com/lightwebinc/over
 - _The overlay object plane: publish BEEF once, and every overlay hears_ (Lightweb Inc., Paper 006): <https://1bsv.net/papers/overlay-object-plane.pdf>
 - _Arcade v2 on a multicast delivery fabric_ (Lightweb Inc., Paper 007), for the sibling bridge: <https://1bsv.net/papers/arcade-on-the-fabric.pdf>
 
-## Licence
+## License
 
 Apache-2.0 (see `LICENSE`). Third-party dependencies and the attribution their
-licences require are in `NOTICE`. There is no licence check in this software,
+licenses require are in `NOTICE`. There is no license check in this software,
 no call home, and no metering of any kind inside it.

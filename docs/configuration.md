@@ -40,8 +40,7 @@ subscription and this configuration have drifted apart, so alert on it.
 | `-engine-workers` | `4` | concurrent engine submits. The lane never waits on the engine, so an engine stall cannot hold the delivery socket past the edge's write deadline |
 | `-engine-queue` | `256` | deliveries queued behind the workers. A full queue sheds: the delivery is counted, logged and refused, and the host misses that object until its own catch-up finds it |
 | `-engine-queue-bytes` | `0` | also bound the queue by the bytes of the objects in it (0: by `-engine-queue` alone). Memory is what a queue costs, so a deep `-engine-queue` with a byte bound rides out a burst of small objects and stays bounded for large ones |
-| `-publish-lanes` | `1` | up-tunnel connections from the facade to the edge's BEEF lane. One is the posture so far (one lane per bridge, records in queue order). More lanes send records down whichever connection is free, so the edge fragments and emits records concurrently; records of one put may then reach the plane out of queue order (an entry can precede its last pieces; providers wait for them). Experiment, 2026-11-01 |
-| `-stop-drain` | `30s` | at stop (SIGTERM), how long the workers keep submitting the objects already queued before the bridge exits. The lane delivered them, so nothing upstream sends them again; a restart without the drain dropped every one of them. The service's stop timeout must exceed it (the lab unit allows 60 s) |
+| `-stop-drain` | `30s` | at stop (SIGTERM), how long the workers keep submitting the objects already queued before the bridge exits. The lane delivered them, so nothing upstream sends them again; without the drain a restart drops every one of them. The service's stop timeout must exceed it |
 | `-engine-retries` | `4` | retries for a failed submit before the object is dropped; `-1` disables |
 
 Every engine client (the primary, routes, shadows, the facade) shares one
@@ -147,6 +146,7 @@ whether the lane rather than a third party is feeding verification. Only
 | `-publish-source` | none | the slot inner the facade sources from |
 | `-publish-queue` | `1024` | bounded; a full queue sheds and answers 503 |
 | `-publish-prefer-after` | `5m` | fail back to the first address after this long away; `0` is sticky |
+| `-publish-lanes` | `1` | up-tunnel connections from the facade to the edge's BEEF lane. With one, records leave in queue order. With more, each record leaves down whichever connection is free, so the edge fragments and emits records concurrently and the records of one put may reach the plane out of queue order (an entry can precede its last pieces; providers wait for them) |
 
 `-publish-source` is checked at startup against the machine's own addresses.
 Publishing from an address this host does not carry defeats the fabric's

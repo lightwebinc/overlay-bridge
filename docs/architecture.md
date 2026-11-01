@@ -104,7 +104,7 @@ A bounded seen-set keyed on SHA-256(ContentID ‖ TopicID), the same key the
 fabric's own ingress claims an object under. Both sides mark before they act.
 
 **This is sound only while the engine does not propagate.** An engine
-re-serialises what it propagates, so an HTTPS propagation echo of our own
+re-serializes what it propagates, so an HTTPS propagation echo of our own
 object would arrive with different bytes, a different ContentID, and this guard
 would not catch it. The posture that switches propagation off is what makes a
 bytes-derived identity safe here. Re-enabling propagation re-opens that
