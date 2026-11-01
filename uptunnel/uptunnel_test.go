@@ -305,3 +305,42 @@ func TestSentCallbackRunsOnlyOnActualSend(t *testing.T) {
 		t.Fatal("sent callback did not run after a successful send")
 	}
 }
+
+// TestQueueLanesShareTheWork: with two lanes the queue opens two connections
+// and every record still arrives exactly once.
+func TestQueueLanesShareTheWork(t *testing.T) {
+	s := newSink(t)
+	defer s.close()
+	cs := []*Client{{Addrs: []string{s.addr()}}, {Addrs: []string{s.addr()}}}
+	q := NewQueueLanes(cs, 64, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- q.Run(ctx) }()
+	const n = 16
+	for i := 0; i < n; i++ {
+		if err := q.Publish(ctx, []byte{0xBE, 0xEF, byte(i)}, nil); err != nil {
+			t.Fatalf("publish %d: %v", i, err)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && q.Stats().Sent < n {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if st := q.Stats(); st.Sent != n {
+		t.Fatalf("stats = %+v, want %d sent", st, n)
+	}
+	s.waitDials(t, 2)
+	cancel()
+	<-done
+	_ = q.Close()
+	s.mu.Lock()
+	total := 0
+	for _, b := range s.got {
+		total += len(b)
+	}
+	s.mu.Unlock()
+	if total != 3*n {
+		t.Fatalf("sink got %d bytes, want %d", total, 3*n)
+	}
+}
