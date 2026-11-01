@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -30,11 +29,7 @@ var ErrQueueFull = errors.New("uptunnel: publish queue full")
 // to tell its client. Silently dropping here would make the bridge claim a
 // publication it never made.
 type Queue struct {
-	// cs are the lanes: one connection each, every one a sender on the one
-	// queue. With one lane (the default) records leave in queue order; with
-	// more, whichever lane is free takes the next record, so the edge
-	// dispatches records concurrently.
-	cs  []*Client
+	c   *Client
 	ch  chan item
 	log *slog.Logger
 	// PollInterval is how often Run polls the client (0 = DefaultPollInterval).
@@ -65,27 +60,10 @@ type QueueStats struct {
 // would trade a visible shed for an invisible memory leak under the same
 // stall.
 func NewQueue(c *Client, depth int, log *slog.Logger) *Queue {
-	return NewQueueLanes([]*Client{c}, depth, log)
-}
-
-// NewQueueLanes is NewQueue over several clients: one lane each, sharing
-// the queue. cs must not be empty.
-func NewQueueLanes(cs []*Client, depth int, log *slog.Logger) *Queue {
 	if depth <= 0 {
 		depth = 1024
 	}
-	return &Queue{cs: cs, ch: make(chan item, depth), log: log}
-}
-
-// Close closes every lane's connection.
-func (q *Queue) Close() error {
-	var first error
-	for _, c := range q.cs {
-		if err := c.Close(); err != nil && first == nil {
-			first = err
-		}
-	}
-	return first
+	return &Queue{c: c, ch: make(chan item, depth), log: log}
 }
 
 // Publish enqueues one record without blocking. It returns [ErrQueueFull] when
@@ -137,33 +115,12 @@ func (q *Queue) Run(ctx context.Context) error {
 	}
 	tick := time.NewTicker(every)
 	defer tick.Stop()
-	var wg sync.WaitGroup
-	for _, c := range q.cs {
-		wg.Add(1)
-		go func(c *Client) {
-			defer wg.Done()
-			q.lane(ctx, c)
-		}(c)
-	}
-	defer wg.Wait()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-tick.C:
-			for _, c := range q.cs {
-				c.Poll(ctx)
-			}
-		}
-	}
-}
-
-// lane sends the queue's records down one client until ctx ends.
-func (q *Queue) lane(ctx context.Context, c *Client) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
+			q.c.Poll(ctx)
 		case it := <-q.ch:
 			sent := it.sent
 			done := func(confirmed bool) {
@@ -176,7 +133,7 @@ func (q *Queue) lane(ctx context.Context, c *Client) {
 					sent()
 				}
 			}
-			if err := c.Send(ctx, it.rec, done); err != nil {
+			if err := q.c.Send(ctx, it.rec, done); err != nil {
 				q.failed.Add(1)
 				if q.log != nil {
 					q.log.Error("up-tunnel publish failed; record is not on the plane", "err", err, "bytes", len(it.rec))
@@ -188,13 +145,7 @@ func (q *Queue) lane(ctx context.Context, c *Client) {
 
 // Stats returns a snapshot for the collector.
 func (q *Queue) Stats() QueueStats {
-	var cs Stats
-	for _, c := range q.cs {
-		s := c.Stats()
-		cs.Resent += s.Resent
-		cs.Unconfirmed += s.Unconfirmed
-		cs.PeerClosed += s.PeerClosed
-	}
+	cs := q.c.Stats()
 	return QueueStats{
 		Depth:       uint64(len(q.ch)),
 		Capacity:    uint64(cap(q.ch)),

@@ -77,7 +77,6 @@ type config struct {
 	edgeBeefPort       int
 	publishSource      string
 	publishQueue       int
-	publishLanes       int
 	publishPreferAfter time.Duration
 
 	guardTTL     time.Duration
@@ -133,7 +132,6 @@ func main() {
 	flag.IntVar(&c.edgeBeefPort, "edge-beef-port", 8725, "the open ingress port")
 	flag.StringVar(&c.publishSource, "publish-source", "", "local source address for the up-tunnel; the slot inner the facade sources from")
 	flag.IntVar(&c.publishQueue, "publish-queue", 1024, "bounded publish queue depth")
-	flag.IntVar(&c.publishLanes, "publish-lanes", 1, "up-tunnel connections to the edge's lane; records leave down whichever is free")
 	flag.DurationVar(&c.publishPreferAfter, "publish-prefer-after", 5*time.Minute, "fail back to the first ingress address after this long off it; 0 = sticky")
 	flag.DurationVar(&c.guardTTL, "guard-ttl", 30*time.Minute, "loop-guard entry lifetime")
 	flag.IntVar(&c.guardEntries, "guard-entries", 1<<20, "loop-guard ceiling")
@@ -269,7 +267,11 @@ func run(c config, log *slog.Logger) error {
 	// ---- up-tunnel and the facade.
 	var queue *uptunnel.Queue
 	if c.mode == "all" && c.edgeIngress != "" {
-		var localAddr *net.TCPAddr
+		client := &uptunnel.Client{
+			Addrs:  ingressAddrs(c.edgeIngress, c.edgeBeefPort),
+			Prefer: c.publishPreferAfter,
+			Log:    log,
+		}
 		if c.publishSource != "" {
 			// Assert the source exists locally rather than discovering at the
 			// first publish that own-traffic exclusion has been silently
@@ -279,23 +281,10 @@ func run(c config, log *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			localAddr = addr
+			client.LocalAddr = addr
 		}
-		lanes := max(c.publishLanes, 1)
-		clients := make([]*uptunnel.Client, lanes)
-		for i := range clients {
-			clients[i] = &uptunnel.Client{
-				Addrs:     ingressAddrs(c.edgeIngress, c.edgeBeefPort),
-				Prefer:    c.publishPreferAfter,
-				LocalAddr: localAddr,
-				Log:       log,
-			}
-		}
-		queue = uptunnel.NewQueueLanes(clients, c.publishQueue, log)
-		defer func() { _ = queue.Close() }()
-		if lanes > 1 {
-			log.Info("up-tunnel lanes", "lanes", lanes)
-		}
+		defer func() { _ = client.Close() }()
+		queue = uptunnel.NewQueue(client, c.publishQueue, log)
 	}
 
 	tasks := newGroup(ctx)
