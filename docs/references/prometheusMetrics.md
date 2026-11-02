@@ -60,8 +60,11 @@ With `-pprof-listen` set, `net/http/pprof` is served on that loopback address
 | `overlay_bridge_header_warm_duration_seconds` | Gauge | none | Wall time of the warm-up; 0 when it is off. |
 | `overlay_bridge_config_info` | Gauge | `verify`, `verify_network`, `verify_finality`, `engine_workers`, `gomaxprocs`, `gogc`, `gomemlimit`, `sig_verifier` | Always 1. The run settings a measurement is stamped with; `sig_verifier` is `-sig-verifier`. |
 | `overlay_bridge_facade_total` | Counter | `result` = `ok`, `malformed`, `unknown_topic`, `loop_dropped`, `engine_error`, `publish_failed` | Submit-facade submissions. |
-| `overlay_bridge_publish_total` | Counter | `result` = `enqueued`, `sent`, `resent`, `shed`, `failed` | Up-tunnel publications. `sent` is confirmed by the ingress (acknowledged, and the connection stayed up through the grace window), never just written locally. `resent` counts records written again after the connection they were on died. `failed` counts records not written to either address and records lost after their resends. A shed record is not on the plane. |
-| `overlay_bridge_publish_queue_depth` | Gauge | none | Instantaneous publish backlog. |
+| `overlay_bridge_publish_total` | Counter | `result` = `enqueued`, `waited`, `sent`, `resent`, `shed`, `failed` | Up-tunnel publications. `waited` counts publishes that found the queue full and waited for room (`-publish-wait`), whether they were then enqueued or shed. `sent` is confirmed by the ingress (acknowledged, and the connection stayed up through the grace window), never just written locally. `resent` counts records written again after the connection they were on died. `failed` counts records not written to either address and records lost after their resends. A shed record is not on the plane. |
+| `overlay_bridge_publish_queue_depth` | Gauge | none | Instantaneous publish backlog. At `overlay_bridge_publish_queue_capacity` a submission waits `-publish-wait` for room, then is shed |
+| `overlay_bridge_publish_queue_capacity` | Gauge | none | Size of the publish queue (`-publish-queue`) |
+| `overlay_bridge_publish_queue_bytes` | Gauge | none | Bytes of the records in the publish backlog right now |
+| `overlay_bridge_publish_queue_bytes_capacity` | Gauge | none | The publish queue's byte bound (`-publish-queue-bytes`); 0 is none. At it a submission waits `-publish-wait` for room, then is shed |
 | `overlay_bridge_publish_unconfirmed` | Gauge | none | Records written to the up-tunnel and not yet confirmed. |
 | `overlay_bridge_uptunnel_peer_closed_total` | Counter | none | Up-tunnel connections the ingress closed or that failed (EOF, reset, keepalive or user timeout). |
 | `overlay_bridge_guard_entries` | Gauge | none | Loop-guard entries retained. |

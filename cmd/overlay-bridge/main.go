@@ -77,6 +77,8 @@ type config struct {
 	edgeBeefPort       int
 	publishSource      string
 	publishQueue       int
+	publishQBytes      int64
+	publishWait        time.Duration
 	publishPreferAfter time.Duration
 
 	guardTTL     time.Duration
@@ -131,7 +133,9 @@ func main() {
 	flag.StringVar(&c.edgeIngress, "edge-ingress", "", "up-tunnel hosts, comma list in failover order (side A then side B)")
 	flag.IntVar(&c.edgeBeefPort, "edge-beef-port", 8725, "the open ingress port")
 	flag.StringVar(&c.publishSource, "publish-source", "", "local source address for the up-tunnel; the slot inner the facade sources from")
-	flag.IntVar(&c.publishQueue, "publish-queue", 1024, "bounded publish queue depth")
+	flag.IntVar(&c.publishQueue, "publish-queue", 1024, "records queued for the up-tunnel; a full queue waits -publish-wait for room, then sheds")
+	flag.Int64Var(&c.publishQBytes, "publish-queue-bytes", 256<<20, "also bound the publish queue by the bytes queued (0 = by -publish-queue alone); a record larger than the bound is carried alone, never refused for its size")
+	flag.DurationVar(&c.publishWait, "publish-wait", 2*time.Second, "how long a submission waits for room in a full publish queue before it is shed and answered 503 (0 = never: a full queue sheds at once)")
 	flag.DurationVar(&c.publishPreferAfter, "publish-prefer-after", 5*time.Minute, "fail back to the first ingress address after this long off it; 0 = sticky")
 	flag.DurationVar(&c.guardTTL, "guard-ttl", 30*time.Minute, "loop-guard entry lifetime")
 	flag.IntVar(&c.guardEntries, "guard-entries", 1<<20, "loop-guard ceiling")
@@ -285,6 +289,7 @@ func run(c config, log *slog.Logger) error {
 		}
 		defer func() { _ = client.Close() }()
 		queue = uptunnel.NewQueue(client, c.publishQueue, log)
+		queue.MaxBytes, queue.Wait = c.publishQBytes, c.publishWait
 	}
 
 	tasks := newGroup(ctx)
@@ -458,6 +463,9 @@ func (c config) validate() error {
 	}
 	if c.alsoWorkers < 0 || c.alsoQueue < 0 || c.alsoBytes < 0 {
 		return errors.New("-also-workers, -also-queue and -also-queue-bytes must not be negative (0 takes the default)")
+	}
+	if c.publishQBytes < 0 || c.publishWait < 0 {
+		return errors.New("-publish-queue-bytes and -publish-wait must be 0 (off) or more")
 	}
 	if _, err := feed.ParseVerifyMode(c.verifyMode); err != nil {
 		return fmt.Errorf("-verify: %w", err)

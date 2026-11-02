@@ -38,13 +38,14 @@ but encoding that type back out produces Go field names, and a client reading
 200 and no error anywhere. Verified byte-identical against `@bsv/overlay`
 v2.3.1.
 
-**A publish that does not happen is a 503.** When the publish queue is full or
-the plane is unreachable, the object is not on the plane, so the facade answers
-503 with `Retry-After` and the client requeues. The local admittance is real,
-but it is not what the client asked for, and answering 200 is the one thing a
-publish interface must never do. This is safe because a failed publish is
-retryable: the loop guard is marked only after a publish succeeds, and the
-fabric ingress drops a second identical submission in flight.
+**A publish that does not happen is a 503.** When the publish queue has no room
+within `-publish-wait` or the plane is unreachable, the object is not on the
+plane, so the facade answers 503 with `Retry-After` and the client requeues.
+The local admittance is real, but it is not what the client asked for, and
+answering 200 is the one thing a publish interface must never do. This is safe
+because a failed publish is retryable: the loop guard is marked only after a
+publish succeeds, and the fabric ingress drops a second identical submission in
+flight.
 
 ## Proven against the released engines
 

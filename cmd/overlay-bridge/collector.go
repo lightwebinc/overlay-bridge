@@ -54,14 +54,20 @@ var (
 	descFacade = prometheus.NewDesc("overlay_bridge_facade_total",
 		"Facade submissions, by result.", []string{"result"}, nil)
 	descQueue = prometheus.NewDesc("overlay_bridge_publish_total",
-		"Up-tunnel publications, by result. sent = confirmed by the ingress, never just written locally; resent = written again after the connection it was on died; failed = not written, or lost after its resends. A shed record is NOT on the plane and is not billed.",
+		"Up-tunnel publications, by result. waited = found the queue full and waited for room (-publish-wait), then was enqueued or shed; sent = confirmed by the ingress, never just written locally; resent = written again after the connection it was on died; failed = not written, or lost after its resends. A shed record is NOT on the plane and is not billed.",
 		[]string{"result"}, nil)
 	descUnconfirmed = prometheus.NewDesc("overlay_bridge_publish_unconfirmed",
 		"Records written to the up-tunnel and not yet confirmed by the ingress.", nil, nil)
 	descPeerClosed = prometheus.NewDesc("overlay_bridge_uptunnel_peer_closed_total",
 		"Up-tunnel connections the ingress closed or that failed under the bridge (EOF, reset, keepalive or user timeout).", nil, nil)
 	descQueueDepth = prometheus.NewDesc("overlay_bridge_publish_queue_depth",
-		"Instantaneous publish backlog.", nil, nil)
+		"Instantaneous publish backlog. At overlay_bridge_publish_queue_capacity a submission waits -publish-wait for room, then is shed.", nil, nil)
+	descQueueCap = prometheus.NewDesc("overlay_bridge_publish_queue_capacity",
+		"Size of the publish queue (-publish-queue).", nil, nil)
+	descQueueBytes = prometheus.NewDesc("overlay_bridge_publish_queue_bytes",
+		"Bytes of the records in the publish backlog right now.", nil, nil)
+	descQueueBytesCap = prometheus.NewDesc("overlay_bridge_publish_queue_bytes_capacity",
+		"The publish queue's byte bound (-publish-queue-bytes); 0 is none. At it a submission waits -publish-wait for room, then is shed.", nil, nil)
 	descGuard = prometheus.NewDesc("overlay_bridge_guard_entries",
 		"Loop-guard entries retained.", nil, nil)
 	descLane = prometheus.NewDesc("overlay_bridge_lane_objects_total",
@@ -123,7 +129,7 @@ var (
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
 		descFeed, descSteak, descHeaders, descTip, descRoots, descFacade,
-		descQueue, descQueueDepth, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
+		descQueue, descQueueDepth, descQueueCap, descQueueBytes, descQueueBytesCap, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
 		descBuild, descVerifyScripts, descMismatch, descShadow, descWarm, descWarmDuration, descConfig,
 		descEngineQueue, descEngineQueueCap, descEngineQueueBytes, descEngineQueueBytesCap, descWorkers, descWorkersBusy, descShedRoute, descShadowQueue, descShadowQueueCap,
 		descAlso, descAlsoQueue, descAlsoQueueCap,
@@ -334,7 +340,11 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descQueue, s.Shed, "shed")
 		counter(ch, descQueue, s.Failed, "failed")
 		counter(ch, descQueue, s.Resent, "resent")
+		counter(ch, descQueue, s.Waited, "waited")
 		gauge(ch, descQueueDepth, float64(s.Depth))
+		gauge(ch, descQueueCap, float64(s.Capacity))
+		gauge(ch, descQueueBytes, float64(s.Bytes))
+		gauge(ch, descQueueBytesCap, float64(s.BytesCapacity))
 		gauge(ch, descUnconfirmed, float64(s.Unconfirmed))
 		counter(ch, descPeerClosed, s.PeerClosed)
 	}

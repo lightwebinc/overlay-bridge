@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func baseConfig() config {
@@ -46,6 +47,9 @@ func TestValidate(t *testing.T) {
 			c.engineRoutes = routeFlags{"tm_bstore_*=http://host:8280,also=http://host:8280"}
 		}, "-engine-route"},
 		{"a negative also queue", func(c *config) { c.alsoBytes = -1 }, "must not be negative"},
+		{"a negative publish byte bound", func(c *config) { c.publishQBytes = -1 }, "-publish-queue-bytes"},
+		{"a negative publish wait", func(c *config) { c.publishWait = -time.Second }, "-publish-wait"},
+		{"publish bounds off", func(c *config) { c.publishQBytes, c.publishWait = 0, 0 }, ""},
 		{"a malformed route", func(c *config) { c.engineRoutes = routeFlags{"tm_bsecret_*"} }, "-engine-route"},
 		{"a route whose shadow is its primary", func(c *config) {
 			c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280,shadow=http://host:8280"}

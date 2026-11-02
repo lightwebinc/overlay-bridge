@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/lightwebinc/overlay-bridge/feed"
+	"github.com/lightwebinc/overlay-bridge/uptunnel"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -101,10 +102,17 @@ func TestLoadSeriesArePresetAtZero(t *testing.T) {
 		QueueDepth: 32,
 		Routes:     []*feed.Route{{Pattern: "tm_app_*", Submit: &feed.Client{Base: "http://127.0.0.1:2"}, Shadow: &feed.Shadow{Name: "tm_app_*", QueueDepth: 8}}},
 	}
+	q := uptunnel.NewQueue(&uptunnel.Client{}, 16, nil)
+	q.MaxBytes = 1024
 	rec := httptest.NewRecorder()
-	(&collector{feed: f, timings: newTimings()}).handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	(&collector{feed: f, queue: q, timings: newTimings()}).handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	for _, want := range []string{
+		"overlay_bridge_publish_queue_depth 0",
+		"overlay_bridge_publish_queue_capacity 16",
+		"overlay_bridge_publish_queue_bytes 0",
+		"overlay_bridge_publish_queue_bytes_capacity 1024",
+		`overlay_bridge_publish_total{result="waited"} 0`,
 		"overlay_bridge_engine_queue_depth 0",
 		"overlay_bridge_engine_queue_capacity 32",
 		"overlay_bridge_engine_workers 4",

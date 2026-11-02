@@ -144,7 +144,9 @@ whether the lane rather than a third party is feeding verification. Only
 | `-edge-ingress` | none | slot inners in failover order, side A then side B, never hot-hot |
 | `-edge-beef-port` | `8725` | appended when an entry carries no port |
 | `-publish-source` | none | the slot inner the facade sources from |
-| `-publish-queue` | `1024` | bounded; a full queue sheds and answers 503 |
+| `-publish-queue` | `1024` | records queued for the up-tunnel. A full queue holds the submission for `-publish-wait`, then sheds it and answers 503 |
+| `-publish-queue-bytes` | `268435456` | also bound the queue by the bytes of the records in it (0: by `-publish-queue` alone). Memory is what a queue costs: by count alone, a thousand 4 MiB pieces sit in it. A record is admitted when it fits under the bound or when the queue is empty, so one larger than the bound is carried alone rather than refused for its size |
+| `-publish-wait` | `2s` | how long a submission waits for room in a full queue before it is shed and answered 503; `0` sheds at once. A drain that falls behind for a moment then shows as `POST /submit` latency rather than as refusals a client treats as failed puts. Keep it under the client's own request timeout |
 | `-publish-prefer-after` | `5m` | fail back to the first address after this long away; `0` is sticky |
 
 `-publish-source` is checked at startup against the machine's own addresses.
@@ -152,6 +154,10 @@ Publishing from an address this host does not carry defeats the fabric's
 own-traffic exclusion, so our own objects come back to us: billable egress and
 a full verification per object before the engine's duplicate check discards
 it. That failure is silent, hence a startup check.
+
+`overlay_bridge_publish_queue_bytes` against its `_capacity`, and
+`overlay_bridge_publish_total{result="waited"}`, show a queue at its bound
+before anything is shed.
 
 ## Listeners
 
