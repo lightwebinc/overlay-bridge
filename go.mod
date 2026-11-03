@@ -6,7 +6,7 @@ require (
 	github.com/bsv-blockchain/go-sdk v1.7.3
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1
 	github.com/lightwebinc/shard-common v0.22.0
-	github.com/lightwebinc/teranode-bridge v0.11.1
+	github.com/lightwebinc/teranode-bridge v0.12.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	golang.org/x/sys v0.49.0
