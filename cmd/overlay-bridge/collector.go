@@ -332,6 +332,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descFacade, s.LoopDropped, "loop_dropped")
 		counter(ch, descFacade, s.EngineError, "engine_error")
 		counter(ch, descFacade, s.PublishFailed, "publish_failed")
+		counter(ch, descFacade, s.Trusted, "trusted")
 	}
 	if c.queue != nil {
 		s := c.queue.Stats()

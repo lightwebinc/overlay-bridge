@@ -29,6 +29,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
+	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +82,65 @@ type Config struct {
 	// A submission the engine failed is not offered: there is no answer to
 	// compare, and the client's retry brings the object again.
 	ShadowFacade bool
+	// Trusted names the sources whose submissions on some topics are
+	// published without the local route: no engine, no shadow, no other
+	// local target, and no local check. A storage node's gateway hands its
+	// own provider every piece in process, so the facade's route to that
+	// provider would only check again what the gateway minted. Empty, every
+	// submission is routed and checked; the operator lists only its own
+	// addresses.
+	Trusted []TrustRule
+}
+
+// TrustRule is one -facade-trusted value: the topics Pattern names (a
+// glob, as a route's) from a source in Nets are published unrouted.
+type TrustRule struct {
+	Pattern string
+	Nets    []netip.Prefix
+}
+
+// trusts reports whether a submission on topic from addr (a request's
+// RemoteAddr) skips the local route.
+func (f *Facade) trusts(addr, topic string) bool {
+	if len(f.cfg.Trusted) == 0 {
+		return false
+	}
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := ap.Addr().Unmap()
+	for _, r := range f.cfg.Trusted {
+		if ok, err := path.Match(r.Pattern, topic); err != nil || !ok {
+			continue
+		}
+		for _, n := range r.Nets {
+			if n.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ParseTrust parses one -facade-trusted value: GLOB=CIDR[,CIDR]...
+func ParseTrust(v string) (TrustRule, error) {
+	pattern, nets, ok := strings.Cut(v, "=")
+	if !ok || pattern == "" || nets == "" {
+		return TrustRule{}, fmt.Errorf("%q is not GLOB=CIDR[,CIDR]", v)
+	}
+	if _, err := path.Match(pattern, ""); err != nil {
+		return TrustRule{}, fmt.Errorf("%q: the pattern: %v", v, err)
+	}
+	r := TrustRule{Pattern: pattern}
+	for _, s := range strings.Split(nets, ",") {
+		p, err := netip.ParsePrefix(strings.TrimSpace(s))
+		if err != nil {
+			return TrustRule{}, fmt.Errorf("%q: %v", v, err)
+		}
+		r.Nets = append(r.Nets, p.Masked())
+	}
+	return r, nil
 }
 
 // Facade is the submit server.
@@ -87,6 +149,7 @@ type Facade struct {
 
 	mu                                                                   sync.Mutex
 	ok, malformed, unknownTopic, loopDropped, engineError, publishFailed uint64
+	trusted                                                              uint64
 }
 
 // New returns a facade.
@@ -95,13 +158,15 @@ func New(cfg Config) *Facade { return &Facade{cfg: cfg} }
 // Stats is a point-in-time snapshot.
 type Stats struct {
 	OK, Malformed, UnknownTopic, LoopDropped, EngineError, PublishFailed uint64
+	// Trusted counts topics published unrouted for a trusted source.
+	Trusted uint64
 }
 
 // Stats returns a counter snapshot.
 func (f *Facade) Stats() Stats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return Stats{f.ok, f.malformed, f.unknownTopic, f.loopDropped, f.engineError, f.publishFailed}
+	return Stats{f.ok, f.malformed, f.unknownTopic, f.loopDropped, f.engineError, f.publishFailed, f.trusted}
 }
 
 func (f *Facade) bump(p *uint64) {
@@ -204,30 +269,39 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 			_, known = f.cfg.Guard.Lookup(contentID, topicID)
 		}
 
-		// Forward either way. A repeat is harmless: the host dedups it and
-		// answers with an empty admittance, which is what the client would
-		// have got by submitting to the host directly.
-		engine, shadow := f.enginesFor(name)
-		answer, err := engine.SubmitDetail(ctx, name, object)
-		if err != nil {
-			f.bump(&f.engineError)
-			f.logf("facade: engine submit failed", "topic", name, "err", err)
-			// No per-item verdict list: the caller requeues the whole
-			// submission rather than voting on any one object.
-			httpError(w, http.StatusBadGateway, "engine submit failed")
-			return
-		}
-		wrapped = wrapped || answer.Wrapped
-		for k, v := range answer.Steak {
-			steak[k] = v
-		}
-		if _, ok := steak[name]; !ok {
-			steak[name] = &overlay.AdmittanceInstructions{}
-		}
-		if f.cfg.ShadowFacade {
-			// Never blocks, never fails: a non-blocking put on the shadow's
-			// own queue, as the feed's offer is.
-			shadow.Offer(name, object, "", answer.Steak[name])
+		// A trusted source's topic is published unrouted (Config.Trusted):
+		// answered as an engine answers an object it admits, and nothing
+		// local is asked.
+		trusted := f.trusts(r.RemoteAddr, name)
+		if trusted {
+			f.bump(&f.trusted)
+			steak[name] = &overlay.AdmittanceInstructions{OutputsToAdmit: []uint32{0}}
+		} else {
+			// Forward either way. A repeat is harmless: the host dedups it and
+			// answers with an empty admittance, which is what the client would
+			// have got by submitting to the host directly.
+			engine, shadow := f.enginesFor(name)
+			answer, err := engine.SubmitDetail(ctx, name, object)
+			if err != nil {
+				f.bump(&f.engineError)
+				f.logf("facade: engine submit failed", "topic", name, "err", err)
+				// No per-item verdict list: the caller requeues the whole
+				// submission rather than voting on any one object.
+				httpError(w, http.StatusBadGateway, "engine submit failed")
+				return
+			}
+			wrapped = wrapped || answer.Wrapped
+			for k, v := range answer.Steak {
+				steak[k] = v
+			}
+			if _, ok := steak[name]; !ok {
+				steak[name] = &overlay.AdmittanceInstructions{}
+			}
+			if f.cfg.ShadowFacade {
+				// Never blocks, never fails: a non-blocking put on the shadow's
+				// own queue, as the feed's offer is.
+				shadow.Offer(name, object, "", answer.Steak[name])
+			}
 		}
 
 		if known {
@@ -239,7 +313,9 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 		// The route's other local targets get what the primary accepted: the
 		// plane does not deliver this host's own publications back to it
 		// (own-traffic exclusion), so this hand-off is their delivery.
-		feed.RouteFor(f.cfg.Routes, name).OfferAlso(name, object)
+		if !trusted {
+			feed.RouteFor(f.cfg.Routes, name).OfferAlso(name, object)
+		}
 		if f.cfg.Publish == nil {
 			continue
 		}
