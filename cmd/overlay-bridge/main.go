@@ -54,6 +54,7 @@ type config struct {
 	alsoBytes     int64
 	shadowFacade  bool
 	engineRoutes  routeFlags
+	trusted       routeFlags // -facade-trusted values
 	engineTimeout time.Duration
 	engineWorkers int
 	engineQueue   int
@@ -122,6 +123,7 @@ func main() {
 	flag.IntVar(&c.submitRetries, "engine-retries", 4, "retries for a failed engine submit before the object is DROPPED; -1 disables")
 	flag.IntVar(&c.maxObject, "max-object", 0, "object-byte ceiling; 0 = codec default (64 MiB)")
 	flag.StringVar(&c.facadeListen, "facade-listen", "[::]:9175", "the client-facing BRC-22 /submit listener; empty = off")
+	flag.Var(&c.trusted, "facade-trusted", "GLOB=CIDR[,CIDR]: the facade publishes the topics GLOB names from a source in a CIDR without the local route (no engine, no shadow, no also, no check); for a storage node's own gateway, whose provider has every piece already. Repeatable; none by default")
 	flag.StringVar(&c.headersListen, "headers-listen", "[::]:9178", "chain-tracker read API; empty = off")
 	flag.StringVar(&c.headerAnchor, "header-anchor", "", "header service for the initial anchor, gap re-anchor and roots below it")
 	flag.DurationVar(&c.headerAnchorTimeout, "header-anchor-timeout", 5*time.Second, "bounded; never unbounded")
@@ -315,10 +317,17 @@ func run(c config, log *slog.Logger) error {
 		if queue != nil {
 			pub = queue
 		}
+		var trusted []facade.TrustRule
+		for _, v := range c.trusted {
+			tr, _ := facade.ParseTrust(v) // validated at start
+			trusted = append(trusted, tr)
+			log.Info("facade: trusted source", "topics", tr.Pattern, "nets", fmt.Sprint(tr.Nets))
+		}
 		fac = facade.New(facade.Config{
 			Engine: submitter, Publish: pub, Guard: g,
 			Topics: topicSet, MaxObject: c.maxObject, Log: log,
 			Routes: f.Routes, Shadow: f.Shadow, ShadowFacade: c.shadowFacade,
+			Trusted: trusted,
 		})
 		addr := firstAddr(c.facadeListen)
 		tasks.go_("facade", func(ctx context.Context) error { return fac.Serve(ctx, addr) })
@@ -454,6 +463,14 @@ func (c config) validate() error {
 		return errors.New("-shadow-engine needs an engine to shadow: -mode sink submits nowhere")
 	} else if len(c.engineRoutes) > 0 {
 		return errors.New("-engine-route needs an engine to route from: -mode sink submits nowhere")
+	}
+	for _, v := range c.trusted {
+		if _, err := facade.ParseTrust(v); err != nil {
+			return fmt.Errorf("-facade-trusted: %w", err)
+		}
+	}
+	if len(c.trusted) > 0 && (c.mode != "all" || c.facadeListen == "") {
+		return errors.New("-facade-trusted needs the facade: -mode all and -facade-listen")
 	}
 	if c.shadowFacade && c.shadowEngine == "" && !c.engineRoutes.anyShadow() {
 		return errors.New("-shadow-facade needs a shadow to offer to: set -shadow-engine or a route with shadow=")

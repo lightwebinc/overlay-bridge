@@ -51,6 +51,11 @@ func TestValidate(t *testing.T) {
 		{"a negative publish wait", func(c *config) { c.publishWait = -time.Second }, "-publish-wait"},
 		{"publish bounds off", func(c *config) { c.publishQBytes, c.publishWait = 0, 0 }, ""},
 		{"a malformed route", func(c *config) { c.engineRoutes = routeFlags{"tm_bsecret_*"} }, "-engine-route"},
+		{"a trusted source", func(c *config) { c.trusted = routeFlags{"tm_bstoreblob_*=127.0.0.1/32,::1/128"} }, ""},
+		{"a malformed trusted source", func(c *config) { c.trusted = routeFlags{"tm_bstoreblob_*=127.0.0.1"} }, "-facade-trusted"},
+		{"a trusted source with no facade", func(c *config) {
+			c.trusted, c.facadeListen = routeFlags{"tm_bstoreblob_*=127.0.0.1/32"}, ""
+		}, "-facade-trusted"},
 		{"a route whose shadow is its primary", func(c *config) {
 			c.engineRoutes = routeFlags{"tm_bsecret_*=http://host:8280,shadow=http://host:8280"}
 		}, "same origin"},
