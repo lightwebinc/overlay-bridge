@@ -138,8 +138,17 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Bound the read. The body is whatever a client sent, so the ceiling is
-	// applied to the reader rather than checked after the fact.
-	object, err := readBody(r, f.maxObject())
+	// applied to the reader rather than checked after the fact. A body with
+	// a Content-Length is read in behind the submission record's envelope
+	// for the first topic, so that buffer is the record the plane gets and
+	// a slice of it the object: the object is not copied into a record of
+	// its own (4 MiB a piece on a storage plane, zeroed and copied once per
+	// piece before).
+	var prefix []byte
+	if r.ContentLength > 0 && len(topics) > 0 {
+		prefix, _ = objfmt.EncodeBEEFRecordHeader([]string{topics[0]}, int(r.ContentLength))
+	}
+	object, firstRecord, err := readBodyAfter(r, f.maxObject(), prefix)
 	if errors.Is(err, errTooLarge) {
 		f.bump(&f.malformed)
 		httpError(w, http.StatusRequestEntityTooLarge, "object exceeds the configured maximum")
@@ -240,11 +249,13 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 		// carries the rest as labels; one record per topic keeps every topic
 		// the client named deliverable, and each record still names the
 		// topic it is for, so a subscriber sees what it was published under.
-		record, err := objfmt.EncodeBEEFRecord([]string{name}, object)
-		if err != nil {
-			f.bump(&f.publishFailed)
-			f.logf("facade: could not encode submission record", "topic", name, "err", err)
-			continue
+		record := firstRecord
+		if record == nil || name != topics[0] {
+			if record, err = objfmt.EncodeBEEFRecord([]string{name}, object); err != nil {
+				f.bump(&f.publishFailed)
+				f.logf("facade: could not encode submission record", "topic", name, "err", err)
+				continue
+			}
 		}
 		// The guard is marked Submitted only once the record has actually been
 		// sent, from the publisher's callback. Marking on acceptance into the
@@ -297,26 +308,39 @@ var errTooLarge = errors.New("facade: object exceeds the configured maximum")
 // body that proves too large is refused the same way whether or not its
 // length was declared.
 func readBody(r *http.Request, limit int) ([]byte, error) {
+	object, _, err := readBodyAfter(r, limit, nil)
+	return object, err
+}
+
+// readBodyAfter is readBody with the body read in behind prefix when its
+// Content-Length is declared: it returns the object, and the buffer holding
+// prefix then the object (nil when the body was read without one), which
+// a prefix shaped as the record's envelope makes the record itself.
+func readBodyAfter(r *http.Request, limit int, prefix []byte) (object, buf []byte, err error) {
 	if cl := r.ContentLength; cl >= 0 && cl <= int64(limit) {
-		buf := make([]byte, cl+1)
-		n, err := io.ReadFull(r.Body, buf)
+		buf := make([]byte, len(prefix)+int(cl)+1)
+		copy(buf, prefix)
+		n, err := io.ReadFull(r.Body, buf[len(prefix):])
 		switch {
 		case int64(n) == cl && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)):
-			return buf[:n], nil
+			if prefix == nil {
+				return buf[:n], nil, nil
+			}
+			return buf[len(prefix) : len(prefix)+n], buf[:len(prefix)+n], nil
 		case err == nil:
-			return nil, errors.New("facade: body runs past its Content-Length")
+			return nil, nil, errors.New("facade: body runs past its Content-Length")
 		default:
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	object, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
+	object, err = io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(object) > limit {
-		return nil, errTooLarge
+		return nil, nil, errTooLarge
 	}
-	return object, nil
+	return object, nil, nil
 }
 
 // enginesFor picks the engine and the shadow for a topic: its route's, or
