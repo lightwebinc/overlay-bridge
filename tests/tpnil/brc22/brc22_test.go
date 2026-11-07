@@ -145,7 +145,20 @@ func TestTPNIL_BRC22SubmitBoundaryRuntime(t *testing.T) {
 		variants = append(variants, variant{name, base, rec})
 	}
 
-	checked := 0
+	// The runtime set is named, not counted: a duplicated vector must not stand
+	// in for one that is missing.
+	want := []string{
+		"brc22.topics.json-array", "brc22.topics.comma-list", "brc22.topics.whitespace-in-json-elements",
+		"brc22.topics.empty-entry", "brc22.topics.duplicate", "brc22.topics.empty-array",
+		"brc22.topics.non-string-element", "brc22.response.topic-keyed", "brc22.response.client-decoding",
+	}
+	done := map[string]bool{}
+	mark := func(id string) {
+		if done[id] {
+			t.Fatalf("%s: vector appears twice in the file", id)
+		}
+		done[id] = true
+	}
 	for _, v := range vf.Vectors {
 		var want json.RawMessage
 		for _, o := range v.Observations {
@@ -191,7 +204,7 @@ func TestTPNIL_BRC22SubmitBoundaryRuntime(t *testing.T) {
 				}
 			}
 			t.Logf("BRC22 %s runtime: %s; matches the recorded go-overlay-services observation", v.ID, strings.Join(seen, ", "))
-			checked++
+			mark(v.ID)
 		case v.ID == "brc22.response.topic-keyed":
 			var w struct {
 				Body json.RawMessage `json:"body"`
@@ -206,7 +219,7 @@ func TestTPNIL_BRC22SubmitBoundaryRuntime(t *testing.T) {
 				}
 			}
 			t.Logf("BRC22 %s runtime: both registrations answer exactly the recorded body, the topic map wrapped under STEAK", v.ID)
-			checked++
+			mark(v.ID)
 		case v.ID == "brc22.response.client-decoding":
 			f := &topic.HTTPSOverlayBroadcastFacilitator{Client: httpClient}
 			steak, err := f.Send(variants[0].base, &overlay.TaggedBEEF{Beef: []byte{0x01}, Topics: []string{"tm_example_1"}})
@@ -222,13 +235,18 @@ func TestTPNIL_BRC22SubmitBoundaryRuntime(t *testing.T) {
 				t.Fatalf("%s: facilitator read topics %v, recorded [STEAK]", v.ID, keys)
 			}
 			t.Logf("BRC22 %s runtime: go-sdk's facilitator read topics %v and no error, matching the recorded observation", v.ID, keys)
-			checked++
+			mark(v.ID)
 		}
 	}
-	if checked != 9 {
-		t.Fatalf("checked %d vectors, want the 7 header vectors and both response vectors", checked)
+	for _, id := range want {
+		if !done[id] {
+			t.Fatalf("%s: no runtime observation made; the vector file lacks it or it carries no go-overlay-services observation", id)
+		}
 	}
-	t.Logf("BRC22 runtime: %d vectors observed through go-overlay-services' HTTP routes", checked)
+	if len(done) != len(want) {
+		t.Fatalf("observed %d vectors, want exactly the %d named", len(done), len(want))
+	}
+	t.Logf("BRC22 runtime: %d vectors observed through go-overlay-services' HTTP routes", len(done))
 }
 
 func sameJSON(a, b []byte) bool {
