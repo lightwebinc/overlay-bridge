@@ -164,6 +164,7 @@ before anything is shed.
 | Flag | Default | Notes |
 | --- | --- | --- |
 | `-facade-listen` | `[::]:9175` | the client-facing submit listener; empty disables it |
+| `-facade-trusted` | (none) | `GLOB=CIDR[,CIDR]`: a submission on a topic the glob names, from a source in one of the CIDRs, is published without the local route (no engine, no shadow, no also target, no check) and answered as an admitted object. For a storage node's own gateway, whose provider already holds every piece in process. Repeatable; needs `-mode all` and `-facade-listen`, and the bridge refuses to start otherwise. List only this host's own addresses |
 | `-headers-listen` | `[::]:9178` | the chain-tracker read API |
 | `-metrics-addr` | `[::]:9179` | `/metrics`, `/healthz`, `/readyz`; empty disables it |
 | `-stats-every` | `1m` | interval of the stats log line; `0` is off |
