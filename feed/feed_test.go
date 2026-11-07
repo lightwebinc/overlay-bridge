@@ -172,7 +172,7 @@ func TestHandleParseError(t *testing.T) {
 // TestSubmitRetriesThenRecovers is the data-loss fix. Dropping an object on
 // the first engine error lost 55 and 56 objects on the two lab hosts in a
 // single afternoon, every one of them while the engine was restarting for a
-// deploy — an object that had already crossed the fabric and been written to
+// deploy, an object that had already crossed the fabric and been written to
 // the process, thrown away for a condition that clears in seconds.
 func TestSubmitRetriesThenRecovers(t *testing.T) {
 	sub := &flakySubmitter{failures: 2, steak: admitted("tm_example")}

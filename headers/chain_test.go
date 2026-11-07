@@ -419,8 +419,8 @@ func TestReanchoredRootBooksAgainstTheAnchor(t *testing.T) {
 // permanently reporting known:false although the lane had delivered them.
 //
 // Re-anchoring fetches a missing parent from the anchor and marks it
-// viaAnchor. When the lane later delivers that same header — which happens
-// whenever the lane is merely LATE rather than missing — Observe took the
+// viaAnchor. When the lane later delivers that same header, which happens
+// whenever the lane is merely LATE rather than missing: Observe took the
 // re-delivery fast path and returned without touching provenance, so a header
 // this host received first-hand kept reporting as a third party's answer for
 // ever. That under-reports the lane in the one metric that is supposed to

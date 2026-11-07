@@ -79,7 +79,7 @@ type Feed struct {
 	// loop. The constraint that must not be broken is the one in main.go: an
 	// engine stall may never hold the delivery socket past the edge's write
 	// deadline. A worker blocking costs throughput and, if the queue fills,
-	// sheds — which is counted and visible. It never applies backpressure to
+	// sheds, which is counted and visible. It never applies backpressure to
 	// the socket.
 	SubmitRetries int
 	// SubmitBackoff is the base delay between submit attempts; each attempt

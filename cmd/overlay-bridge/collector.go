@@ -168,8 +168,8 @@ func buildLabels() (version, shardCommon, goSDK string) {
 	// debug.ReadBuildInfo reports Main.Version as "(devel)" for anything not
 	// built as a tagged module download, which is every binary we actually
 	// deploy. A build_info series whose version label reads "(devel)" on every
-	// host cannot answer the question it exists for — "is this host running
-	// the release I think it is" — so the Makefile's -X main.Version stamp
+	// host cannot answer the question it exists for: "is this host running
+	// the release I think it is", so the Makefile's -X main.Version stamp
 	// wins whenever it has been set.
 	version, shardCommon, goSDK = "unknown", "unknown", "unknown"
 	bi, ok := debug.ReadBuildInfo()
@@ -279,7 +279,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		// restarted INTO a state where the engine admits nothing never creates
 		// an `admitted` series at all, so a rule of the form
 		// `empty > 0 and on(instance) admitted == 0` finds no right-hand
-		// vector and silently never fires — blind in exactly the scenario it
+		// vector and silently never fires: blind in exactly the scenario it
 		// exists for. The same trap the rules file warns about in prose, here
 		// in the emitter.
 		seen := make(map[feed.SteakKey]bool, len(s.Steak))

@@ -241,7 +241,7 @@ func (s *Store) Observe(ctx context.Context, hdr []byte) (Observation, error) {
 		// PROVENANCE. If this header is held only because re-anchoring fetched
 		// it from the anchor, the lane has now delivered it first-hand, and
 		// leaving the viaAnchor mark would report a header this host received
-		// as a third party's answer for ever — under-reporting exactly the
+		// as a third party's answer for ever: under-reporting exactly the
 		// thing the source label exists to measure. Promote it.
 		if e, held := s.at[h][hash]; held && e.viaAnchor {
 			e.viaAnchor = false

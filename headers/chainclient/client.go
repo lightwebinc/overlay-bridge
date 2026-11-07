@@ -87,7 +87,7 @@ func (c *Client) get(ctx context.Context, path string, out any) (int, error) {
 // ⚠ DO NOT DRIVE ENGINE REORG HANDLING AGAINST THIS TRACKER AS IT STANDS.
 // The overlay engine's isProvenAnchorStale treats isValidRootForHeight ==
 // false as STALE and evicts, and this method returns false for a 404 that
-// means "the store does not hold that height" — not "that root is wrong".
+// means "the store does not hold that height", not "that root is wrong".
 // Wiring handleReorg or revalidateRecentAnchors to this today would therefore
 // destroy live state for every height the store has not yet received, which on
 // a host anchored below the chain tip is most of them. Fix the 404 semantics
