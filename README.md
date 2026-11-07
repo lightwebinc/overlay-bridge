@@ -117,7 +117,7 @@ see the [metrics reference](docs/references/prometheusMetrics.md).
 ## Status
 
 Released (see the [releases](https://github.com/lightwebinc/overlay-bridge/releases))
-and running in a lab deployment: the bridge lands objects into a released engine, serves
+and in deployment: the bridge lands objects into a released engine, serves
 headers from its own BRC-135 lane, and both reference hosts admit
 object-for-object. What has been proven against the released engines, and what
 remains open, is in [docs/contracts.md](docs/contracts.md).
