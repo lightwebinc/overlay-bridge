@@ -153,8 +153,13 @@ func TestTPNIL_BRC22SubmitBoundaryRuntime(t *testing.T) {
 				want = o.Result
 			}
 		}
+		// Every vector this harness replays must carry the server observation it
+		// is compared with; a missing one fails here, by name, never as a skip.
+		if (strings.HasPrefix(v.ID, "brc22.topics.") || v.ID == "brc22.response.topic-keyed") && want == nil {
+			t.Fatalf("%s: no go-overlay-services observation recorded", v.ID)
+		}
 		switch {
-		case strings.HasPrefix(v.ID, "brc22.topics.") && want != nil:
+		case strings.HasPrefix(v.ID, "brc22.topics."):
 			var in struct {
 				Value string `json:"value"`
 			}
@@ -203,7 +208,7 @@ func TestTPNIL_BRC22SubmitBoundaryRuntime(t *testing.T) {
 			t.Logf("BRC22 %s runtime: both registrations answer exactly the recorded body, the topic map wrapped under STEAK", v.ID)
 			checked++
 		case v.ID == "brc22.response.client-decoding":
-			f := &topic.HTTPSOverlayBroadcastFacilitator{Client: http.DefaultClient}
+			f := &topic.HTTPSOverlayBroadcastFacilitator{Client: httpClient}
 			steak, err := f.Send(variants[0].base, &overlay.TaggedBEEF{Beef: []byte{0x01}, Topics: []string{"tm_example_1"}})
 			if err != nil {
 				t.Fatalf("%s: facilitator error %v, recorded none", v.ID, err)
@@ -221,7 +226,7 @@ func TestTPNIL_BRC22SubmitBoundaryRuntime(t *testing.T) {
 		}
 	}
 	if checked != 9 {
-		t.Fatalf("checked %d vectors, want the 7 header vectors with a server observation and both response vectors", checked)
+		t.Fatalf("checked %d vectors, want the 7 header vectors and both response vectors", checked)
 	}
 	t.Logf("BRC22 runtime: %d vectors observed through go-overlay-services' HTTP routes", checked)
 }
@@ -240,24 +245,34 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
+// httpClient bounds every request, so a server that accepts and never answers
+// fails the test instead of holding it to the go test deadline.
+var httpClient = &http.Client{Timeout: 10 * time.Second}
+
 func post(t *testing.T, base, topics string) (int, []byte) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, base+"/submit", bytes.NewReader([]byte{0x01}))
+	req, err := http.NewRequest(http.MethodPost, base+"/submit", bytes.NewReader([]byte{0x01}))
+	if err != nil {
+		t.Fatalf("POST /submit request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Topics", topics)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST /submit: %v", err)
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("POST /submit body: %v", err)
+	}
 	return resp.StatusCode, b
 }
 
 func waitUp(t *testing.T, base string) {
 	t.Helper()
 	for i := 0; i < 50; i++ {
-		if resp, err := http.Get(base + "/"); err == nil {
+		if resp, err := httpClient.Get(base + "/"); err == nil {
 			resp.Body.Close()
 			return
 		}

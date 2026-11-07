@@ -172,8 +172,12 @@ func TestTPNIL_OverlayDeliveryContract(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("repeated facade POST /submit: HTTP %d", status)
 	}
-	if ins := again[fx.Topic]; len(ins.OutputsToAdmit) != 0 {
-		t.Fatalf("repeated submission admitted %v", ins.OutputsToAdmit)
+	repeat, found := again[fx.Topic]
+	if !found || len(again) != 1 {
+		t.Fatalf("repeated submission answered topics %v, want exactly %s", sortedTopics(again), fx.Topic)
+	}
+	if len(repeat.OutputsToAdmit) != 0 {
+		t.Fatalf("repeated submission admitted %v", repeat.OutputsToAdmit)
 	}
 	settle := time.Now().Add(20 * time.Second)
 	for time.Now().Before(settle) {
@@ -292,7 +296,13 @@ func scrape(t *testing.T, ctx context.Context, url string) samples {
 		t.Fatalf("scrape %s: %v", url, err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("scrape %s: HTTP %d", url, resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		t.Fatalf("scrape %s: read: %v", url, err)
+	}
 	var out samples
 	for _, line := range strings.Split(string(raw), "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -384,4 +394,14 @@ func sortedKeys(m map[string]string) []string {
 
 func delta(before, after float64) string {
 	return strconv.FormatFloat(after-before, 'f', -1, 64)
+}
+
+// sortedTopics lists the topic keys of an admittance answer, for failure messages.
+func sortedTopics(m map[string]admittance) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
