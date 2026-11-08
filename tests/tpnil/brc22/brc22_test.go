@@ -221,18 +221,39 @@ func TestTPNIL_BRC22SubmitBoundaryRuntime(t *testing.T) {
 			t.Logf("BRC22 %s runtime: both registrations answer exactly the recorded body, the topic map wrapped under STEAK", v.ID)
 			mark(v.ID)
 		case v.ID == "brc22.response.client-decoding":
+			// Compared with the vector's own client observation, not a constant,
+			// so a changed recorded result cannot pass unread.
+			var rec json.RawMessage
+			for _, o := range v.Observations {
+				if o.Implementation == "go-sdk-facilitator" {
+					rec = o.Result
+				}
+			}
+			if rec == nil {
+				t.Fatalf("%s: no go-sdk-facilitator observation recorded", v.ID)
+			}
+			var w struct {
+				Topics []string `json:"topics"`
+				Error  *string  `json:"error"`
+			}
+			if err := json.Unmarshal(rec, &w); err != nil {
+				t.Fatalf("%s recorded result: %v", v.ID, err)
+			}
+			sort.Strings(w.Topics)
 			f := &topic.HTTPSOverlayBroadcastFacilitator{Client: httpClient}
 			steak, err := f.Send(variants[0].base, &overlay.TaggedBEEF{Beef: []byte{0x01}, Topics: []string{"tm_example_1"}})
-			if err != nil {
-				t.Fatalf("%s: facilitator error %v, recorded none", v.ID, err)
+			if (err != nil) != (w.Error != nil) {
+				t.Fatalf("%s: facilitator error %v, recorded error %v", v.ID, err, w.Error)
 			}
-			keys := make([]string, 0, len(*steak))
-			for k := range *steak {
-				keys = append(keys, k)
+			var keys []string
+			if steak != nil {
+				for k := range *steak {
+					keys = append(keys, k)
+				}
 			}
 			sort.Strings(keys)
-			if !reflect.DeepEqual(keys, []string{"STEAK"}) {
-				t.Fatalf("%s: facilitator read topics %v, recorded [STEAK]", v.ID, keys)
+			if !reflect.DeepEqual(keys, w.Topics) {
+				t.Fatalf("%s: facilitator read topics %v, recorded %v", v.ID, keys, w.Topics)
 			}
 			t.Logf("BRC22 %s runtime: go-sdk's facilitator read topics %v and no error, matching the recorded observation", v.ID, keys)
 			mark(v.ID)
