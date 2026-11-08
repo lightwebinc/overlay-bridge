@@ -31,7 +31,10 @@ import (
 	"github.com/bsv-blockchain/go-sdk/transaction"
 )
 
-const fixtureSchema = "lightweb-beef-fixture@1.0.0"
+// fixtureSchemas are the BEEF fixture documents the qualification reads: the
+// one written by multicast-test's fixture tool, and the laboratory's earlier one.
+// Both carry exactly schema, txid, topic, encoding and beefHex.
+var fixtureSchemas = map[string]bool{"tpnil-beef-fixture@1.0.0": true, "lightweb-beef-fixture@1.0.0": true}
 
 type fixture struct {
 	Schema   string `json:"schema"`
@@ -106,7 +109,7 @@ func TestTPNIL_OverlayDeliveryContract(t *testing.T) {
 
 	var fx fixture
 	readJSON(t, e.fixture, &fx)
-	if fx.Schema != fixtureSchema || fx.Topic == "" {
+	if !fixtureSchemas[fx.Schema] || fx.Topic == "" {
 		t.Fatalf("fixture schema %q topic %q", fx.Schema, fx.Topic)
 	}
 	obj, err := hex.DecodeString(fx.BEEFHex)
