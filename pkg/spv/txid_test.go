@@ -107,7 +107,7 @@ func TestTransactionListedTwiceIsHashedOnUse(t *testing.T) {
 	}
 	child := beef.Transactions[*f.child.TxID()].Transaction
 	if child.Inputs[0].SourceTransaction == beef.Transactions[*f.src.TxID()].Transaction {
-		t.Log("the parse linked the copy its map holds; the hash-on-use path is not reached")
+		t.Fatal("the parse linked the copy its map holds, so this object no longer reaches the hash-on-use path; the test needs another shape")
 	}
 	vd := (&Verifier{Tracker: f.tracker(), Network: NetworkAll}).Verify(context.Background(), b)
 	check(t, vd, ResultOK, ReasonNone)

@@ -105,13 +105,26 @@ func BenchmarkLanePiece(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
 	go func() { served <- lane.Serve(ctx) }()
+	exited := false
 	defer func() {
 		cancel()
+		if exited {
+			return
+		}
 		if err := <-served; err != nil {
 			b.Error(err)
 		}
 	}()
-	for !lane.Bound() || lane.ListenerAddr() == nil {
+	for deadline := time.Now().Add(10 * time.Second); !lane.Bound() || lane.ListenerAddr() == nil; {
+		select {
+		case err := <-served:
+			exited = true
+			b.Fatalf("the lane stopped before it bound: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			b.Fatal("the lane did not bind within 10 s")
+		}
 		time.Sleep(time.Millisecond)
 	}
 	conn, err := net.Dial("tcp", lane.ListenerAddr().String())
@@ -127,8 +140,20 @@ func BenchmarkLanePiece(b *testing.B) {
 			}
 		}
 	}
+	// waitSubmitted waits for n submits, and fails rather than waits on
+	// when any record is refused or lost on the way, or past a deadline.
 	waitSubmitted := func(n int) {
-		for f.Stats().Submitted < uint64(n) {
+		deadline := time.Now().Add(time.Minute + time.Duration(n)*time.Second)
+		for {
+			s := f.Stats()
+			if s.Submitted >= uint64(n) {
+				return
+			}
+			l := lane.Stats()
+			if s.EngineError+s.SPVRefused+s.ParseError+s.Rejected+s.UnknownTopic+s.Shed+l.Errors+l.Dropped > 0 || time.Now().After(deadline) {
+				b.Fatalf("submitted %d of %d: engine errors %d, SPV refused %d, parse errors %d, rejected %d, unknown topic %d, shed %d; lane errors %d, connections dropped %d",
+					s.Submitted, n, s.EngineError, s.SPVRefused, s.ParseError, s.Rejected, s.UnknownTopic, s.Shed, l.Errors, l.Dropped)
+			}
 			time.Sleep(50 * time.Microsecond)
 		}
 	}
