@@ -184,13 +184,25 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 
 	// Link every transaction to its in-object sources and proofs, and find
 	// the tips: transactions no other transaction in the object spends.
+	//
+	// The parse already hashed every transaction it read: go-sdk keys
+	// Beef.Transactions by the txid it computed from the transaction's
+	// bytes, and nothing here changes those bytes (linking sources and
+	// proofs does not enter a transaction's serialization). The graph starts
+	// from those txids instead of serializing and hashing each transaction
+	// again, which for a 4 MiB carrier was a 4 MiB buffer zeroed, filled and
+	// hashed once more per object. A transaction the map does not hold (one
+	// listed twice, whose earlier copy the parse linked as a source) is
+	// hashed on first use, as before (graph.txid).
 	spent := make(map[chainhash.Hash]bool, len(beef.Transactions))
+	hashed := make(map[*transaction.Transaction]chainhash.Hash, len(beef.Transactions))
 	var txids []chainhash.Hash
 	for txid, btx := range beef.Transactions {
 		if btx == nil || btx.Transaction == nil {
 			continue
 		}
 		txids = append(txids, txid)
+		hashed[btx.Transaction] = txid
 		for _, in := range btx.Transaction.Inputs {
 			if in.SourceTXID != nil {
 				spent[*in.SourceTXID] = true
@@ -215,7 +227,7 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 	}
 	g := &graph{
 		ctx: ctx, tracker: tracker, heights: v.Network.heights(), finality: fin, skipScripts: v.SkipScripts,
-		txids: map[*transaction.Transaction]chainhash.Hash{}, mined: map[chainhash.Hash]uint32{},
+		txids: hashed, mined: map[chainhash.Hash]uint32{},
 	}
 	for _, id := range txids {
 		if spent[id] {

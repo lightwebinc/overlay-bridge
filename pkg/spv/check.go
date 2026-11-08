@@ -79,6 +79,9 @@ type graph struct {
 	scripts int
 }
 
+// txid is tx's txid: the one the parse computed (verify seeds txids with
+// them), or, for a transaction the parse's map does not hold, hashed here
+// once.
 func (g *graph) txid(tx *transaction.Transaction) chainhash.Hash {
 	if id, ok := g.txids[tx]; ok {
 		return id
