@@ -170,7 +170,12 @@ func TestTPNIL_OverlayDeliveryContract(t *testing.T) {
 	}
 	t.Logf("OVL-04 both hosts' %s lookups return output %s, and each returned BEEF resolves to the submitted transaction", e.lookupName, outpoint)
 
-	// OVL-05 (ISI-2 V002): a repeated submission is admitted nowhere again.
+	// OVL-05 (ISI-5 V011): a repeated submission creates no second admission.
+	// BRC-22 does not define the answer to a repeat, and engines differ: one
+	// answers with an empty admittance, another replays the receipt of its
+	// first admission. Either is accepted; what is required is that neither
+	// host then holds a second output, however often the repeat crosses the
+	// plane.
 	again, status := submit(t, ctx, e.pubFacade, fx.Topic, obj)
 	if status != http.StatusOK {
 		t.Fatalf("repeated facade POST /submit: HTTP %d", status)
@@ -179,8 +184,13 @@ func TestTPNIL_OverlayDeliveryContract(t *testing.T) {
 	if !found || len(again) != 1 {
 		t.Fatalf("repeated submission answered topics %v, want exactly %s", sortedTopics(again), fx.Topic)
 	}
-	if len(repeat.OutputsToAdmit) != 0 {
-		t.Fatalf("repeated submission admitted %v", repeat.OutputsToAdmit)
+	answer := "an empty admittance"
+	switch {
+	case len(repeat.OutputsToAdmit) == 0:
+	case len(repeat.OutputsToAdmit) == 1 && repeat.OutputsToAdmit[0] == 0:
+		answer = "its original admittance, outputsToAdmit [0]"
+	default:
+		t.Fatalf("repeated submission admitted %v, neither empty nor the original admittance", repeat.OutputsToAdmit)
 	}
 	settle := time.Now().Add(20 * time.Second)
 	for time.Now().Before(settle) {
@@ -191,13 +201,13 @@ func TestTPNIL_OverlayDeliveryContract(t *testing.T) {
 		}
 	}
 	final := read(t, ctx, e, fx.Topic)
-	if final.admitted != after.admitted {
-		t.Fatalf("the receiving engine admitted the repeated object again (%s)", delta(after.admitted, final.admitted))
+	for _, h := range []struct{ role, url string }{{"publishing", e.pubEngine}, {"receiving", e.recvEngine}} {
+		if n := lookupCount(t, ctx, h.url, e.lookupName, outpoint); n != 1 {
+			t.Fatalf("the %s host holds %d outputs at %s after the repeat", h.role, n, outpoint)
+		}
 	}
-	if n := lookupCount(t, ctx, e.recvEngine, e.lookupName, outpoint); n != 1 {
-		t.Fatalf("the receiving host holds %d outputs at %s after the repeat", n, outpoint)
-	}
-	t.Logf("OVL-05 a repeated submission returned an empty admittance, the receiving engine admitted nothing again in 20 s, and it still holds one output %s", outpoint)
+	t.Logf("OVL-05 the repeated submission was answered with %s; after 20 s both hosts still hold exactly one output %s (the receiving bridge took %s more objects from its lane), so the repeat created no second admission",
+		answer, outpoint, delta(after.laneObjects, final.laneObjects))
 }
 
 func submit(t *testing.T, ctx context.Context, base, topic string, body []byte) (map[string]admittance, int) {
