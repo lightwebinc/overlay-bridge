@@ -2,6 +2,7 @@ package feed
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -133,26 +134,35 @@ func BenchmarkLanePiece(b *testing.B) {
 	}
 	defer func() { _ = conn.Close() }()
 
+	// state is the feed's and the lane's counters, for a failure message.
+	state := func() string {
+		s, l := f.Stats(), lane.Stats()
+		return fmt.Sprintf("submitted %d; engine errors %d, SPV refused %d, parse errors %d, rejected %d, unknown topic %d, shed %d; lane errors %d, connections dropped %d",
+			s.Submitted, s.EngineError, s.SPVRefused, s.ParseError, s.Rejected, s.UnknownTopic, s.Shed, l.Errors, l.Dropped)
+	}
+	// limit bounds the writes of n records, and then the wait for them.
+	limit := func(n int) time.Time { return time.Now().Add(time.Minute + time.Duration(n)*time.Second) }
 	send := func(n int) {
+		if err := conn.SetWriteDeadline(limit(n)); err != nil {
+			b.Fatal(err)
+		}
 		for i := 0; i < n; i++ {
 			if _, err := conn.Write(rec); err != nil {
-				b.Fatal(err)
+				b.Fatalf("write %d of %d: %v; %s", i+1, n, err, state())
 			}
 		}
 	}
 	// waitSubmitted waits for n submits, and fails rather than waits on
-	// when any record is refused or lost on the way, or past a deadline.
+	// when any record is refused or lost on the way, or past the limit.
 	waitSubmitted := func(n int) {
-		deadline := time.Now().Add(time.Minute + time.Duration(n)*time.Second)
+		deadline := limit(n)
 		for {
-			s := f.Stats()
+			s, l := f.Stats(), lane.Stats()
 			if s.Submitted >= uint64(n) {
 				return
 			}
-			l := lane.Stats()
 			if s.EngineError+s.SPVRefused+s.ParseError+s.Rejected+s.UnknownTopic+s.Shed+l.Errors+l.Dropped > 0 || time.Now().After(deadline) {
-				b.Fatalf("submitted %d of %d: engine errors %d, SPV refused %d, parse errors %d, rejected %d, unknown topic %d, shed %d; lane errors %d, connections dropped %d",
-					s.Submitted, n, s.EngineError, s.SPVRefused, s.ParseError, s.Rejected, s.UnknownTopic, s.Shed, l.Errors, l.Dropped)
+				b.Fatalf("waiting for %d submits: %s", n, state())
 			}
 			time.Sleep(50 * time.Microsecond)
 		}
