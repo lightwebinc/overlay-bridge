@@ -3,13 +3,13 @@ module github.com/lightwebinc/overlay-bridge
 go 1.26.2
 
 require (
-	github.com/bsv-blockchain/go-sdk v1.7.3
+	github.com/bsv-blockchain/go-sdk v1.7.4
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1
 	github.com/lightwebinc/shard-common v0.24.0
-	github.com/lightwebinc/teranode-bridge v0.12.2
+	github.com/lightwebinc/teranode-bridge v0.12.3
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 )
 
 require (
