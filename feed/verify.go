@@ -88,7 +88,11 @@ func (f *Feed) process(ctx context.Context, j job) error {
 				return fmt.Errorf("feed: SPV refused %s: %w", vd.TxID, vd.Err)
 			case spv.ResultOK:
 				if len(f.MarkerKey) >= spv.MinKeyBytes {
-					marker = spv.Marker(f.MarkerKey, j.object)
+					// The verifier takes the marker with the txids when it
+					// holds the key and read the object in place.
+					if marker = vd.Marker; marker == "" {
+						marker = spv.Marker(f.MarkerKey, j.object)
+					}
 				}
 			}
 		}

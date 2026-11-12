@@ -101,6 +101,11 @@ type Verdict struct {
 	Inputs, Proofs, Depth int
 	Duration              time.Duration
 	Err                   error
+	// Marker is the trust marker for the object under Verifier.MarkerKey,
+	// taken in the same traversal as the txids (inplace.go). It is set only
+	// with ResultOK, and only when the object was read in place; a caller
+	// that finds it empty computes Marker(key, object) itself.
+	Marker string
 }
 
 // Network selects the activation heights scripts are judged under.
@@ -156,6 +161,13 @@ type Verifier struct {
 	// verifier it trusts: an engine that accepted the bridge's marker
 	// (marker.go). Verdict.Scripts is then 0.
 	SkipScripts bool
+	// MarkerKey, when at least MinKeyBytes long, makes a passing verdict
+	// carry the trust marker (Verdict.Marker) without a second pass over
+	// the object.
+	MarkerKey []byte
+
+	// noInPlace parses with go-sdk alone (tests compare the two readings).
+	noInPlace bool
 }
 
 // Verify verifies one BEEF object (BRC-62 V1, BRC-96 V2 or BRC-95 Atomic).
@@ -177,16 +189,28 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	beef, err := parse(raw)
-	if err != nil {
-		return Verdict{Result: ResultRefused, Reason: ReasonParse, Err: err}
+	// The common shape is read where it lies, its txids and the marker in
+	// one traversal; anything else is go-sdk's to parse, and to refuse.
+	var (
+		beef   *transaction.Beef
+		marker string
+		ok     bool
+	)
+	if !v.noInPlace {
+		beef, marker, ok = readInPlace(raw, v.MarkerKey)
+	}
+	if !ok {
+		var err error
+		if beef, err = parse(raw); err != nil {
+			return Verdict{Result: ResultRefused, Reason: ReasonParse, Err: err}
+		}
 	}
 
 	// Link every transaction to its in-object sources and proofs, and find
 	// the tips: transactions no other transaction in the object spends.
 	//
-	// The parse already hashed every transaction it read: go-sdk keys
-	// Beef.Transactions by the txid it computed from the transaction's
+	// The parse already hashed every transaction it read: either reading
+	// keys Beef.Transactions by the txid it computed from the transaction's
 	// bytes, and nothing here changes those bytes (linking sources and
 	// proofs does not enter a transaction's serialization). The graph starts
 	// from those txids instead of serializing and hashing each transaction
@@ -246,6 +270,7 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 	}
 	vd.Result = ResultOK
 	vd.Scripts = g.scripts
+	vd.Marker = marker
 	return vd
 }
 

@@ -43,7 +43,7 @@ type fixture struct {
 	unlock     *p2pkh.P2PKH
 }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t testing.TB) *fixture {
 	t.Helper()
 	priv, err := ec.PrivateKeyFromWif(wif)
 	if err != nil {
@@ -77,7 +77,7 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
-func (f *fixture) spend(t *testing.T, vout uint32) *transaction.Transaction {
+func (f *fixture) spend(t testing.TB, vout uint32) *transaction.Transaction {
 	t.Helper()
 	tx := transaction.NewTransaction()
 	tx.AddInputFromTx(f.src, vout, f.unlock)
