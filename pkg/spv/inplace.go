@@ -213,14 +213,15 @@ func readInPlace(raw, markerKey []byte) (beef *transaction.Beef, marker string, 
 	if !ok || nBUMPs > uint64(c.left()/minBUMPBytes) {
 		return nil, "", false
 	}
-	bumps := make([]*transaction.MerklePath, nBUMPs)
+	// Both lists grow as their items parse: a declared count reserves nothing.
+	bumps := []*transaction.MerklePath{}
 	r := bytes.NewReader(raw[c.at:])
-	for i := range bumps {
+	for i := uint64(0); i < nBUMPs; i++ {
 		mp, err := transaction.NewMerklePathFromReader(r)
 		if err != nil || len(mp.Path) == 0 {
 			return nil, "", false
 		}
-		bumps[i] = mp
+		bumps = append(bumps, mp)
 	}
 	c.at = len(raw) - r.Len()
 
@@ -228,7 +229,7 @@ func readInPlace(raw, markerKey []byte) (beef *transaction.Beef, marker string, 
 	if !ok || nTx == 0 || nTx > uint64(c.left()/minEntryBytes) {
 		return nil, "", false
 	}
-	entries := make([]entry, 0, nTx)
+	var entries []entry
 	for i := uint64(0); i < nTx; i++ {
 		format, ok := c.take(1)
 		if !ok {
