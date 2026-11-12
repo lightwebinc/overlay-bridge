@@ -69,6 +69,12 @@ common shape of an object where it lies (`pkg/spv/inplace.go`):
 | Scripts | copied into allocations of their own | slices of the object's bytes |
 | Txid | the transaction serialized again, then hashed | the transaction's bytes hashed as they stand |
 | Trust marker | a second pass over the object | taken in the same traversal as the txids |
+| Content identifier (loop guard) | a pass over the object on the lane's reader | taken in the same traversal, on a worker |
+
+The loop guard is still told of an object before any submit of it, under
+the same identifier: the worker marks before it submits, and an object that
+never reaches a worker (shed) or carries no digest is hashed and marked as
+before.
 
 The traversal walks the object once, 256 KiB at a time, and feeds each block
 to every digest that covers it while the block is in cache.
