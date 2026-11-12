@@ -2,6 +2,7 @@ package spv
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"testing"
 
@@ -90,7 +91,7 @@ func corpus(t testing.TB) map[string][]byte {
 // to the Beef go-sdk parses, and BEEF V1 is left to go-sdk.
 func TestReadInPlaceIsGoSDKsParse(t *testing.T) {
 	for name, raw := range corpus(t) {
-		beef, _, ok := readInPlace(raw, nil)
+		beef, _, ok := readInPlace(raw, nil, nil)
 		if name == "BEEF V1" {
 			if ok {
 				t.Fatalf("%s: read in place, want it left to go-sdk", name)
@@ -126,14 +127,14 @@ func TestReadInPlaceLeavesTheRestToGoSDK(t *testing.T) {
 	b = append(b, make([]byte, 32)...)
 	cases["unknown format"] = b
 	for name, c := range cases {
-		if _, _, ok := readInPlace(c, nil); ok {
+		if _, _, ok := readInPlace(c, nil, nil); ok {
 			t.Fatalf("%s: read in place", name)
 		}
 	}
 	// A length written long: the same transaction to go-sdk, other bytes to
 	// hash, so it is go-sdk's.
 	long := nonMinimal(t, raw)
-	if _, _, ok := readInPlace(long, nil); ok {
+	if _, _, ok := readInPlace(long, nil, nil); ok {
 		t.Fatal("non-minimal length: read in place")
 	}
 }
@@ -142,7 +143,7 @@ func TestReadInPlaceLeavesTheRestToGoSDK(t *testing.T) {
 // three-byte form of the same number.
 func nonMinimal(t *testing.T, raw []byte) []byte {
 	t.Helper()
-	beef, _, ok := readInPlace(raw, nil)
+	beef, _, ok := readInPlace(raw, nil, nil)
 	if !ok {
 		t.Fatal("piece not read in place")
 	}
@@ -214,7 +215,11 @@ func itoa(n int) string {
 func TestDigestsAcrossBlocks(t *testing.T) {
 	for _, size := range []int{hashBlock - 300, hashBlock, hashBlock + 1, 3*hashBlock + 17, 4 << 20} {
 		p := testpiece.New(t, size)
-		beef, marker, ok := readInPlace(p.BEEF, bytes.Repeat([]byte{1}, MinKeyBytes))
+		var whole [32]byte
+		beef, marker, ok := readInPlace(p.BEEF, bytes.Repeat([]byte{1}, MinKeyBytes), &whole)
+		if whole != sha256.Sum256(p.BEEF) {
+			t.Fatalf("size %d: object digest differs", size)
+		}
 		if !ok {
 			t.Fatalf("size %d: not read in place", size)
 		}
@@ -235,7 +240,7 @@ func FuzzReadInPlace(f *testing.F) {
 		f.Add(raw)
 	}
 	f.Fuzz(func(t *testing.T, raw []byte) {
-		beef, _, ok := readInPlace(raw, nil)
+		beef, _, ok := readInPlace(raw, nil, nil)
 		if !ok {
 			return
 		}

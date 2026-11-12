@@ -185,8 +185,9 @@ func readTx(c *cursor) (*transaction.Transaction, bool) {
 }
 
 // readInPlace reads a BEEF V2, bare or under an Atomic prefix. marker is the
-// trust marker for raw under markerKey ("" without a key).
-func readInPlace(raw, markerKey []byte) (beef *transaction.Beef, marker string, ok bool) {
+// trust marker for raw under markerKey ("" without a key); whole, when not
+// nil, receives SHA-256 of raw.
+func readInPlace(raw, markerKey []byte, whole *[32]byte) (beef *transaction.Beef, marker string, ok bool) {
 	c := &cursor{raw: raw}
 	var subject *chainhash.Hash
 	if v, ok := c.u32(); !ok {
@@ -258,7 +259,7 @@ func readInPlace(raw, markerKey []byte) (beef *transaction.Beef, marker string, 
 		return nil, "", false
 	}
 
-	ids, marker := digests(raw, entries, markerKey)
+	ids, marker := digests(raw, entries, markerKey, whole)
 
 	// The entries as go-sdk's parse links them: in order, a proof by its
 	// index, an input to a transaction that came before it in the object.
@@ -308,10 +309,13 @@ func readInPlace(raw, markerKey []byte) (beef *transaction.Beef, marker string, 
 	return &transaction.Beef{Version: transaction.BEEF_V2, BUMPs: bumps, Transactions: txs, NewestTxID: &newest}, marker, true
 }
 
-// digests takes every entry's txid, and the marker when a key is given, in
-// one traversal of raw.
-func digests(raw []byte, entries []entry, markerKey []byte) ([]chainhash.Hash, string) {
-	var mac hash.Hash
+// digests takes every entry's txid, the marker when a key is given, and
+// SHA-256 of raw when whole is not nil, in one traversal of raw.
+func digests(raw []byte, entries []entry, markerKey []byte, whole *[32]byte) ([]chainhash.Hash, string) {
+	var mac, all hash.Hash
+	if whole != nil {
+		all = sha256.New()
+	}
 	if len(markerKey) >= MinKeyBytes {
 		mac = hmac.New(sha256.New, markerKey)
 		mac.Write([]byte(markerLabel))
@@ -326,6 +330,9 @@ func digests(raw []byte, entries []entry, markerKey []byte) ([]chainhash.Hash, s
 		if mac != nil {
 			mac.Write(raw[at:end])
 		}
+		if all != nil {
+			all.Write(raw[at:end])
+		}
 		for i := first; i < len(entries) && entries[i].start < end; i++ {
 			e := &entries[i]
 			hs[i].Write(raw[max(at, e.start):min(end, e.end)])
@@ -338,6 +345,9 @@ func digests(raw []byte, entries []entry, markerKey []byte) ([]chainhash.Hash, s
 	var sum [sha256.Size]byte
 	for i, h := range hs {
 		ids[i] = sha256.Sum256(h.Sum(sum[:0]))
+	}
+	if all != nil {
+		all.Sum(whole[:0])
 	}
 	marker := ""
 	if mac != nil {

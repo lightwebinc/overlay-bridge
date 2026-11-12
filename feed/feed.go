@@ -161,6 +161,9 @@ type job struct {
 	names   []string
 	object  []byte
 	arrived time.Time
+	// unmarked: the loop guard has not been told of this object yet;
+	// process marks it before the first submit (see Handle).
+	unmarked bool
 }
 
 // ErrShed reports a delivery refused because the engine queue was full.
@@ -323,17 +326,21 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 	owned := make([]byte, len(object))
 	copy(owned, object)
 
-	contentID := objfmt.ContentID(owned)
-
-	// Mark BEFORE the submit, for every topic the object lands on here. The
-	// plane has now delivered this object; a client that re-submits the same
-	// bytes to any of them must not push them back up the tunnel. Marking
-	// afterwards leaves a window in which the echo arrives before the mark
-	// lands.
-	if f.Guard != nil {
-		for _, n := range names {
-			f.Guard.Mark(contentID, objfmt.TopicID(n), registry.Delivered)
-		}
+	// The loop guard is told of the object BEFORE the submit, for every
+	// topic it lands on here. The plane has now delivered this object; a
+	// client that re-submits the same bytes to any of them must not push
+	// them back up the tunnel, and marking after the submit leaves a window
+	// in which the echo arrives before the mark lands.
+	//
+	// The object's identity is one more hash of all of it. When this feed
+	// verifies, the verifier takes that hash in the traversal that takes the
+	// txids (spv.Verifier.ObjectDigest), on a worker and not on the lane's
+	// one reader, so the mark is left to process, which marks before it
+	// submits. Without a verifier, and for an object that is not submitted
+	// at all (shed, or sunk), the mark is made here as it always was.
+	deferMark := f.Guard != nil && f.Submit != nil && f.Verify != nil && f.VerifyMode != "" && f.VerifyMode != VerifyOff
+	if f.Guard != nil && !deferMark {
+		f.mark(objfmt.ContentID(owned), names)
 	}
 
 	if f.Submit == nil {
@@ -347,28 +354,44 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		if !f.started.Load() {
 			// Loud rather than silent: a queue nobody drains would fill and
 			// shed as if the engine were slow, which is the wrong diagnosis.
+			if deferMark {
+				f.mark(objfmt.ContentID(owned), names)
+			}
 			f.c.addShed(f.routeName(name))
 			return fmt.Errorf("%w: workers not started", ErrShed)
 		}
 		q := f.queue()
 		n := int64(len(owned))
 		if b := f.queuedBytes.Add(n); f.QueueBytes > 0 && b > f.QueueBytes {
+			if deferMark {
+				f.mark(objfmt.ContentID(owned), names)
+			}
 			f.queuedBytes.Add(-n)
 			f.c.addShed(f.routeName(name))
 			f.logReject("engine queue full (bytes), delivery shed", topicID, "bytes", len(owned), "queued_bytes", b-n)
 			return ErrShed
 		}
 		select {
-		case q <- job{names: names, object: owned, arrived: arrived}:
+		case q <- job{names: names, object: owned, arrived: arrived, unmarked: deferMark}:
 			return nil
 		default:
+			if deferMark {
+				f.mark(objfmt.ContentID(owned), names)
+			}
 			f.queuedBytes.Add(-n)
 			f.c.addShed(f.routeName(name))
 			f.logReject("engine queue full, delivery shed", topicID, "bytes", len(owned), "depth", cap(q))
 			return ErrShed
 		}
 	}
-	return f.process(ctx, job{names: names, object: owned, arrived: arrived})
+	return f.process(ctx, job{names: names, object: owned, arrived: arrived, unmarked: deferMark})
+}
+
+// mark tells the loop guard the plane delivered the object under names.
+func (f *Feed) mark(contentID [32]byte, names []string) {
+	for _, n := range names {
+		f.Guard.Mark(contentID, objfmt.TopicID(n), registry.Delivered)
+	}
 }
 
 // defaultSubmitRetries and defaultSubmitBackoff give up after roughly half a
