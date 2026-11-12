@@ -217,6 +217,8 @@ func run(c config, log *slog.Logger) error {
 		network, _ := spv.ParseNetwork(c.verifyNetwork)    // validated above
 		finality, _ := spv.ParseFinality(c.verifyFinality) // validated above
 		verifier := &spv.Verifier{Tracker: tracker, Network: network, Finality: finality, Timeout: c.verifyTimeout}
+		// The loop guard's identity of an object is taken with its txids.
+		verifier.ObjectDigest = g != nil
 		f.Verify = verifier
 		if c.verifyMarkerKey != "" {
 			key, err := spv.LoadKey(c.verifyMarkerKey)

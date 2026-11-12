@@ -106,6 +106,12 @@ type Verdict struct {
 	// with ResultOK, and only when the object was read in place; a caller
 	// that finds it empty computes Marker(key, object) itself.
 	Marker string
+	// ObjectSHA256 is SHA-256 of the object, taken in that same traversal
+	// when Verifier.ObjectDigest asks for it; HasObjectSHA256 says it is
+	// set, which it is whatever the result once the object was read in
+	// place. Its SHA-256 is the object's content identifier.
+	ObjectSHA256    [32]byte
+	HasObjectSHA256 bool
 }
 
 // Network selects the activation heights scripts are judged under.
@@ -165,6 +171,10 @@ type Verifier struct {
 	// carry the trust marker (Verdict.Marker) without a second pass over
 	// the object.
 	MarkerKey []byte
+	// ObjectDigest makes the verdict carry SHA-256 of the object
+	// (Verdict.ObjectSHA256), for a caller that would otherwise hash the
+	// object once more for its identity.
+	ObjectDigest bool
 
 	// noInPlace parses with go-sdk alone (tests compare the two readings).
 	noInPlace bool
@@ -178,7 +188,12 @@ func (v *Verifier) Verify(ctx context.Context, beef []byte) Verdict {
 	return vd
 }
 
-func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
+func (v *Verifier) verify(ctx context.Context, raw []byte) (vd Verdict) {
+	var (
+		sum    [32]byte
+		hasSum bool
+	)
+	defer func() { vd.ObjectSHA256, vd.HasObjectSHA256 = sum, hasSum }()
 	if v.Tracker == nil {
 		return Verdict{Result: ResultError, Reason: ReasonTracker, Err: errors.New("spv: no chain tracker")}
 	}
@@ -197,7 +212,12 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 		ok     bool
 	)
 	if !v.noInPlace {
-		beef, marker, ok = readInPlace(raw, v.MarkerKey)
+		var whole *[32]byte
+		if v.ObjectDigest {
+			whole = &sum
+		}
+		beef, marker, ok = readInPlace(raw, v.MarkerKey, whole)
+		hasSum = ok && v.ObjectDigest
 	}
 	if !ok {
 		var err error
@@ -233,7 +253,7 @@ func (v *Verifier) verify(ctx context.Context, raw []byte) Verdict {
 			}
 		}
 	}
-	vd := Verdict{Transactions: len(txids)}
+	vd = Verdict{Transactions: len(txids)}
 	vd.Inputs, vd.Proofs, vd.Depth = work(beef)
 	if len(txids) == 0 {
 		vd.Result, vd.Reason, vd.Err = ResultRefused, ReasonParse, errors.New("spv: BEEF holds no transaction")

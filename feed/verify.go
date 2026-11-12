@@ -2,10 +2,12 @@ package feed
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"time"
 
 	"github.com/lightwebinc/overlay-bridge/pkg/spv"
+	"github.com/lightwebinc/shard-common/objfmt"
 )
 
 // VerifyMode is how the feed uses its own SPV verifier.
@@ -77,6 +79,18 @@ func (f *Feed) process(ctx context.Context, j job) error {
 		if f.OnVerified != nil {
 			f.OnVerified(vd)
 		}
+	}
+	if j.unmarked && f.Guard != nil {
+		// Before any submit, and whatever the verdict: the plane delivered
+		// these bytes. The verifier's digest of the object, when it took
+		// one, is the first half of the content identifier.
+		if vd.HasObjectSHA256 {
+			f.mark(sha256.Sum256(vd.ObjectSHA256[:]), j.names)
+		} else {
+			f.mark(objfmt.ContentID(j.object), j.names)
+		}
+	}
+	if verified {
 		if f.VerifyMode == VerifyEnforce {
 			switch vd.Result {
 			case spv.ResultRefused:
