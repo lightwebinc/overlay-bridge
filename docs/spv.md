@@ -57,6 +57,32 @@ transactions it has already verified (pointer-distinct copies that share a
 txid and the same evidence). Here each Transaction value is verified once
 per tip. That is a cost difference only. The checks are the same.
 
+## Reading the object in place
+
+Large objects are bound by memory traffic before they are bound by
+instructions: a 4 MiB storage piece that is copied and hashed several times
+moves many times its size through memory. The verifier therefore reads the
+common shape of an object where it lies (`pkg/spv/inplace.go`):
+
+| Step | go-sdk's parse | Read in place |
+|---|---|---|
+| Scripts | copied into allocations of their own | slices of the object's bytes |
+| Txid | the transaction serialized again, then hashed | the transaction's bytes hashed as they stand |
+| Trust marker | a second pass over the object | taken in the same traversal as the txids |
+
+The traversal walks the object once, 256 KiB at a time, and feeds each block
+to every digest that covers it while the block is in cache.
+
+It applies to a BEEF V2, bare or under an Atomic prefix, whose entries all
+carry their transaction in standard format with minimally encoded lengths.
+Everything else (BEEF V1, a txid-only entry, a transaction listed twice,
+extended format, a length written long, trailing bytes, any malformation) is
+declined, not refused: go-sdk parses it and decides, as before. What comes
+out is the `transaction.Beef` go-sdk's parse returns for the same bytes; the
+tests compare the two field by field, fuzz the comparison, and hold the
+verdict equal with and without the in-place reading. The signature check's
+own hash of the outputs is still go-sdk's.
+
 ## Modes (`-verify`)
 
 | Mode | Bridge verifies | Object submitted | Marker | Engine verifies scripts |

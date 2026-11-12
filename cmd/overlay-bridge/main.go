@@ -216,13 +216,19 @@ func run(c config, log *slog.Logger) error {
 	if vmode != feed.VerifyOff {
 		network, _ := spv.ParseNetwork(c.verifyNetwork)    // validated above
 		finality, _ := spv.ParseFinality(c.verifyFinality) // validated above
-		f.Verify = &spv.Verifier{Tracker: tracker, Network: network, Finality: finality, Timeout: c.verifyTimeout}
+		verifier := &spv.Verifier{Tracker: tracker, Network: network, Finality: finality, Timeout: c.verifyTimeout}
+		f.Verify = verifier
 		if c.verifyMarkerKey != "" {
 			key, err := spv.LoadKey(c.verifyMarkerKey)
 			if err != nil {
 				return err
 			}
 			f.MarkerKey = key
+			if vmode == feed.VerifyEnforce {
+				// Only enforce sends the marker: the verifier takes it in
+				// the traversal that takes the txids.
+				verifier.MarkerKey = key
+			}
 		}
 		log.Info("bridge SPV verification", "mode", vmode, "network", network, "finality", c.verifyFinality, "marker", len(f.MarkerKey) > 0)
 	}
