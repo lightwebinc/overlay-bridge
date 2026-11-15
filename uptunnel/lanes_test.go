@@ -2,6 +2,7 @@ package uptunnel
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -158,5 +159,99 @@ func TestLanesDeadLaneShedsToTheOther(t *testing.T) {
 	}
 	if got := qLive.Stats().Sent; got < n*9/10 {
 		t.Fatalf("the live lane sent %d of %d", got, n)
+	}
+}
+
+// TestLanesFullLaneHandsToAnother: fewest bytes queued is not room. A lane
+// full by count, of small records, is dealt the next record because it holds
+// the fewest bytes; the record goes to a lane that has room instead of
+// waiting there or being shed.
+func TestLanesFullLaneHandsToAnother(t *testing.T) {
+	a := NewQueue(&Client{}, 4, nil)
+	b := NewQueue(&Client{}, 4, nil)
+	a.Wait, b.Wait = 5*time.Second, 5*time.Second
+	l := NewLanes(a, b)
+	ctx := context.Background()
+	for i := 0; i < 4; i++ { // lane a: full by count, four bytes queued
+		if err := a.Publish(ctx, []byte{byte(i)}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Publish(ctx, make([]byte, 4096), nil); err != nil { // lane b: one large record, three slots free
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := l.Publish(ctx, []byte{0xBE, 0xEF}, nil); err != nil {
+		t.Fatalf("publish with room on the other lane: %v", err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("the publisher waited %v on the full lane", took)
+	}
+	if a.Stats().Depth != 4 || b.Stats().Depth != 2 {
+		t.Fatalf("a holds %d, b holds %d, want 4 and 2", a.Stats().Depth, b.Stats().Depth)
+	}
+	if st := l.Stats(); st.Shed != 0 || st.Waited != 0 {
+		t.Fatalf("stats = %+v, want nothing shed and no wait", st)
+	}
+}
+
+// TestLanesAllFullWaitsThenSheds: with no room on any lane the publisher
+// waits the dealt lane's Wait and the record is shed, once, on that lane.
+func TestLanesAllFullWaitsThenSheds(t *testing.T) {
+	a := NewQueue(&Client{}, 1, nil)
+	b := NewQueue(&Client{}, 1, nil)
+	a.Wait, b.Wait = 40*time.Millisecond, 40*time.Millisecond
+	l := NewLanes(a, b)
+	ctx := context.Background()
+	for _, q := range []*Queue{a, b} {
+		if err := q.Publish(ctx, []byte{1}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := time.Now()
+	err := l.Publish(ctx, []byte{2}, nil)
+	if !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("publish with every lane full: %v, want ErrQueueFull", err)
+	}
+	if took := time.Since(start); took < 30*time.Millisecond {
+		t.Fatalf("refused after %v, before the wait", took)
+	}
+	if st := l.Stats(); st.Shed != 1 || st.Waited != 1 {
+		t.Fatalf("stats = %+v, want one wait and one shed", st)
+	}
+}
+
+// TestLanesWaiterTakesRoomOnAnotherLane: a publisher waiting on its dealt
+// lane takes room that opens on another.
+func TestLanesWaiterTakesRoomOnAnotherLane(t *testing.T) {
+	s := newSink(t)
+	t.Cleanup(s.close)
+	a := NewQueue(&Client{}, 1, nil)                          // never drains
+	b := NewQueue(&Client{Addrs: []string{s.addr()}}, 1, nil) // drains once Run starts
+	a.Wait, b.Wait = 5*time.Second, 5*time.Second
+	l := NewLanes(a, b)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := a.Publish(ctx, []byte{0xBE, 0xEF, 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Publish(ctx, make([]byte, 64), nil); err != nil { // more bytes than a: a is dealt the next record
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- l.Publish(ctx, []byte{0xBE, 0xEF, 2}, nil) }()
+	select {
+	case err := <-done:
+		t.Fatalf("published with every lane full: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	go func() { _ = b.Run(ctx) }() // lane b starts to drain
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("publish after room opened on the other lane: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the publisher kept waiting on its own lane")
 	}
 }

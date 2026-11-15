@@ -30,7 +30,8 @@ const DefaultLaneHold = 2 * time.Second
 // A record goes whole to one lane: the one with the fewest bytes queued, the
 // lanes taking turns when they are level. A lane that drains slower holds
 // more and is offered less, so the split follows what each tunnel carries
-// rather than a fixed share. A lane that has just failed a record (its
+// rather than a fixed share. A lane with no room for the record, by bytes or
+// by count, hands it to another that has. A lane that has just failed a record (its
 // ingress unreachable, a record lost after its resends) is passed over for
 // [Lanes.Hold] while another lane is healthy, so a dead tunnel sheds its share
 // onto the others instead of failing every record it is dealt; with every
@@ -102,12 +103,82 @@ func (l *Lanes) pick() *Queue {
 	return bestAny
 }
 
-// Publish queues record on one lane (see [Lanes] for which) and returns that
-// lane's answer: nil once it is queued, [ErrQueueFull] when the lane had no
-// room within its wait. The record is owned by the lane from here, as with
-// [Queue.Publish].
+// lanePoll is how often a publisher waiting for room looks at the other lanes
+// again. Room on the lane it was dealt wakes it at once; room on another is
+// found by this.
+const lanePoll = 5 * time.Millisecond
+
+// Publish queues record on one lane and returns nil once it is queued. The
+// lane is the one [Lanes] describes; if that lane has no room for the record,
+// by bytes or by count, any other lane in service that has takes it, before
+// the publisher waits or the record is shed (fewest bytes queued does not mean
+// room: a lane full of small records is full). With no room on any of them
+// the publisher waits as on one queue, for the dealt lane's [Queue.Wait], and
+// then gets [ErrQueueFull]; the wait and the shed are booked on that lane.
+// The record is owned by the lane that takes it, as with [Queue.Publish].
 func (l *Lanes) Publish(ctx context.Context, record []byte, sent func()) error {
-	return l.pick().Publish(ctx, record, sent)
+	if len(l.qs) == 1 {
+		return l.qs[0].Publish(ctx, record, sent)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	first := l.pick()
+	rest := l.others(first)
+	it := item{rec: record, sent: sent}
+	offer := func() bool {
+		if first.offer(it) {
+			return true
+		}
+		for _, q := range rest {
+			if q.offer(it) {
+				return true
+			}
+		}
+		return false
+	}
+	if offer() {
+		return nil
+	}
+	if first.Wait <= 0 {
+		return first.refuse(record)
+	}
+	first.waited.Add(1)
+	timer := time.NewTimer(first.Wait)
+	defer timer.Stop()
+	poll := time.NewTicker(lanePoll)
+	defer poll.Stop()
+	for {
+		// The room signal before the attempt, as in Queue.Publish.
+		room := first.roomSignal()
+		if offer() {
+			return nil
+		}
+		select {
+		case <-room:
+		case <-poll.C:
+		case <-timer.C:
+			return first.refuse(record)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// others is the lanes a record dealt to q may go to instead: every other lane
+// that has not failed within the hold or, when q itself has (no lane is
+// healthy), every other lane.
+func (l *Lanes) others(q *Queue) []*Queue {
+	cutoff := l.clock().Add(-l.hold()).UnixNano()
+	any := q.failedAt.Load() > cutoff
+	out := make([]*Queue, 0, len(l.qs)-1)
+	for _, o := range l.qs {
+		if o == q || (!any && o.failedAt.Load() > cutoff) {
+			continue
+		}
+		out = append(out, o)
+	}
+	return out
 }
 
 // Run drains every lane until ctx is done, and returns the first lane's

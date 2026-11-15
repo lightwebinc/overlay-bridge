@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"runtime"
@@ -516,16 +517,26 @@ func (c config) validate() error {
 		if c.edgeIngress == "" || c.publishSource == "" {
 			return errors.New("-publish-lane adds lanes to the first one: set -edge-ingress and -publish-source too, so every lane has a source address of its own")
 		}
-		seen := map[string]bool{c.publishSource: true}
+		// Compared as addresses, not as text: "[2001:db8::10]" and
+		// "2001:DB8:0::10" are one source, and so one flow.
+		first, err := sourceAddr(c.publishSource)
+		if err != nil {
+			return fmt.Errorf("-publish-source: %w", err)
+		}
+		seen := map[netip.Addr]bool{first: true}
 		for _, v := range c.publishLanes {
 			sp, err := parseLane(v)
 			if err != nil {
 				return fmt.Errorf("-publish-lane: %w", err)
 			}
-			if seen[sp.source] {
+			a, err := sourceAddr(sp.source)
+			if err != nil {
+				return fmt.Errorf("-publish-lane: %w", err)
+			}
+			if seen[a] {
 				return fmt.Errorf("-publish-lane %s: that source address already has a lane; two connections from one address are one flow on the fabric and interleave its sequence numbers", sp.source)
 			}
-			seen[sp.source] = true
+			seen[a] = true
 		}
 	}
 	if _, err := feed.ParseVerifyMode(c.verifyMode); err != nil {
@@ -625,6 +636,21 @@ func warmStore(ctx context.Context, c config, store *headers.Store, log *slog.Lo
 	default:
 		log.Info("header warm-up done", attrs...)
 	}
+}
+
+// sourceAddr is the address a publish source names, read as resolveSource
+// reads it (brackets and a port are allowed), in one form: two spellings of
+// one address are the same source.
+func sourceAddr(s string) (netip.Addr, error) {
+	host := strings.Trim(s, "[]")
+	if h, _, err := net.SplitHostPort(s); err == nil {
+		host = h
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("%q is not an IP address", s)
+	}
+	return a.Unmap(), nil
 }
 
 // resolveSource turns -publish-source into a local address and asserts it

@@ -179,7 +179,9 @@ of them:
   loss).
 - **A record goes whole to one lane**, the one with the fewest bytes queued,
   the lanes taking turns when they are level. A lane that drains slower is
-  offered less.
+  offered less, and a lane with no room for the record hands it to another
+  that has: a publisher waits, and a record is shed, only when no lane in
+  service has room.
 - **A lane that fails is passed over.** After a lane fails a record (its
   ingress unreachable, a record lost after its resends) it gets no more for two
   seconds while another lane is healthy, so a dead tunnel sheds its share onto
