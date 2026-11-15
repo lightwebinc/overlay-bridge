@@ -255,3 +255,29 @@ func TestLanesWaiterTakesRoomOnAnotherLane(t *testing.T) {
 		t.Fatal("the publisher kept waiting on its own lane")
 	}
 }
+
+// TestLanesWaiterTakesALaneBackInService: which lanes are in service is read
+// again at every attempt. A publisher waiting on a full lane takes a lane
+// whose hold ends during its wait.
+func TestLanesWaiterTakesALaneBackInService(t *testing.T) {
+	a := NewQueue(&Client{}, 1, nil)
+	b := NewQueue(&Client{}, 4, nil)
+	a.Wait, b.Wait = 5*time.Second, 5*time.Second
+	l := NewLanes(a, b)
+	l.Hold = 60 * time.Millisecond
+	ctx := context.Background()
+	if err := a.Publish(ctx, []byte{1}, nil); err != nil { // lane a: full
+		t.Fatal(err)
+	}
+	b.fail() // lane b: empty, and out of service for the hold
+	start := time.Now()
+	if err := l.Publish(ctx, []byte{2}, nil); err != nil {
+		t.Fatalf("publish across the end of the other lane's hold: %v", err)
+	}
+	if took := time.Since(start); took < 40*time.Millisecond || took > 2*time.Second {
+		t.Fatalf("published after %v, want about the hold (60ms)", took)
+	}
+	if a.Stats().Depth != 1 || b.Stats().Depth != 1 {
+		t.Fatalf("a holds %d, b holds %d, want 1 and 1", a.Stats().Depth, b.Stats().Depth)
+	}
+}

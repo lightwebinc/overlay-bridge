@@ -72,50 +72,61 @@ func (l *Lanes) clock() time.Time {
 	return time.Now()
 }
 
-// pick is the lane the next record goes to: of the healthy lanes (all of
-// them when none is), the one with the fewest bytes queued, starting the
-// comparison at a lane that rotates so level lanes take turns.
-func (l *Lanes) pick() *Queue {
+// order is the lanes a record may go to now, best first: the lanes that have
+// not failed within the hold (every lane when none is healthy), fewest bytes
+// queued first, level lanes in the order a rotation that begins at start gives
+// them so they take turns. It appends to buf.
+func (l *Lanes) order(start int, buf []*Queue) []*Queue {
 	n := len(l.qs)
-	if n == 1 {
-		return l.qs[0]
-	}
-	start := int(l.next.Add(1) % uint64(n))
 	cutoff := l.clock().Add(-l.hold()).UnixNano()
-	var best, bestAny *Queue
-	var bestBytes, bestAnyBytes int64
+	out := buf
 	for i := 0; i < n; i++ {
-		q := l.qs[(start+i)%n]
-		b := q.bytes.Load()
-		if bestAny == nil || b < bestAnyBytes {
-			bestAny, bestAnyBytes = q, b
-		}
-		if q.failedAt.Load() > cutoff {
-			continue
-		}
-		if best == nil || b < bestBytes {
-			best, bestBytes = q, b
+		if q := l.qs[(start+i)%n]; q.failedAt.Load() <= cutoff {
+			out = append(out, q)
 		}
 	}
-	if best != nil {
-		return best
+	if len(out) == len(buf) {
+		for i := 0; i < n; i++ {
+			out = append(out, l.qs[(start+i)%n])
+		}
 	}
-	return bestAny
+	// A handful of lanes: an insertion sort, which keeps level lanes in
+	// rotation order.
+	lanes := out[len(buf):]
+	for i := 1; i < len(lanes); i++ {
+		for j := i; j > 0 && lanes[j].bytes.Load() < lanes[j-1].bytes.Load(); j-- {
+			lanes[j], lanes[j-1] = lanes[j-1], lanes[j]
+		}
+	}
+	return out
 }
 
-// lanePoll is how often a publisher waiting for room looks at the other lanes
-// again. Room on the lane it was dealt wakes it at once; room on another is
-// found by this.
+// rotate is where the next record's rotation begins.
+func (l *Lanes) rotate() int { return int(l.next.Add(1) % uint64(len(l.qs))) }
+
+// pick is the lane the next record is dealt: the first of [Lanes.order].
+func (l *Lanes) pick() *Queue {
+	if len(l.qs) == 1 {
+		return l.qs[0]
+	}
+	return l.order(l.rotate(), nil)[0]
+}
+
+// lanePoll is how often a publisher waiting for room looks at the lanes
+// again. Room on the lane it was dealt wakes it at once; room on another, or a
+// lane back in service, is found by this.
 const lanePoll = 5 * time.Millisecond
 
 // Publish queues record on one lane and returns nil once it is queued. The
 // lane is the one [Lanes] describes; if that lane has no room for the record,
-// by bytes or by count, any other lane in service that has takes it, before
-// the publisher waits or the record is shed (fewest bytes queued does not mean
-// room: a lane full of small records is full). With no room on any of them
-// the publisher waits as on one queue, for the dealt lane's [Queue.Wait], and
-// then gets [ErrQueueFull]; the wait and the shed are booked on that lane.
-// The record is owned by the lane that takes it, as with [Queue.Publish].
+// by bytes or by count, the next best lane in service that has takes it,
+// before the publisher waits or the record is shed (fewest bytes queued does
+// not mean room: a lane full of small records is full). With no room on any
+// of them the publisher waits as on one queue, for the dealt lane's
+// [Queue.Wait], looking again at which lanes are in service each time it
+// tries, and then gets [ErrQueueFull]; the wait and the shed are booked on
+// the lane the record was first dealt. The record is owned by the lane that
+// takes it, as with [Queue.Publish].
 func (l *Lanes) Publish(ctx context.Context, record []byte, sent func()) error {
 	if len(l.qs) == 1 {
 		return l.qs[0].Publish(ctx, record, sent)
@@ -123,21 +134,22 @@ func (l *Lanes) Publish(ctx context.Context, record []byte, sent func()) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	first := l.pick()
-	rest := l.others(first)
+	start := l.rotate()
+	var buf [8]*Queue
 	it := item{rec: record, sent: sent}
-	offer := func() bool {
-		if first.offer(it) {
-			return true
-		}
-		for _, q := range rest {
+	// offer tries the lanes in service now, best first, and reports the lane
+	// the record was dealt (the best) and whether any took it.
+	offer := func() (dealt *Queue, ok bool) {
+		order := l.order(start, buf[:0])
+		for _, q := range order {
 			if q.offer(it) {
-				return true
+				return order[0], true
 			}
 		}
-		return false
+		return order[0], false
 	}
-	if offer() {
+	first, ok := offer()
+	if ok {
 		return nil
 	}
 	if first.Wait <= 0 {
@@ -151,7 +163,7 @@ func (l *Lanes) Publish(ctx context.Context, record []byte, sent func()) error {
 	for {
 		// The room signal before the attempt, as in Queue.Publish.
 		room := first.roomSignal()
-		if offer() {
+		if _, ok := offer(); ok {
 			return nil
 		}
 		select {
@@ -163,22 +175,6 @@ func (l *Lanes) Publish(ctx context.Context, record []byte, sent func()) error {
 			return ctx.Err()
 		}
 	}
-}
-
-// others is the lanes a record dealt to q may go to instead: every other lane
-// that has not failed within the hold or, when q itself has (no lane is
-// healthy), every other lane.
-func (l *Lanes) others(q *Queue) []*Queue {
-	cutoff := l.clock().Add(-l.hold()).UnixNano()
-	any := q.failedAt.Load() > cutoff
-	out := make([]*Queue, 0, len(l.qs)-1)
-	for _, o := range l.qs {
-		if o == q || (!any && o.failedAt.Load() > cutoff) {
-			continue
-		}
-		out = append(out, o)
-	}
-	return out
 }
 
 // Run drains every lane until ctx is done, and returns the first lane's
