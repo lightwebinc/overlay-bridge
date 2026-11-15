@@ -17,6 +17,33 @@ func TestValidate(t *testing.T) {
 		wantErr string
 	}{
 		{"a valid config", func(*config) {}, ""},
+		{"two lanes", func(c *config) {
+			c.publishSource = "2001:db8:59::10"
+			c.publishLanes = []string{"2001:db8:5a::10=2001:db8:5a::a,2001:db8:5a::b"}
+		}, ""},
+		{"a lane without the first lane's source", func(c *config) {
+			c.publishLanes = []string{"2001:db8:5a::10=2001:db8:5a::a"}
+		}, "set -edge-ingress and -publish-source"},
+		{"a lane on the first lane's source", func(c *config) {
+			c.publishSource = "2001:db8:59::10"
+			c.publishLanes = []string{"2001:db8:59::10=2001:db8:5a::a"}
+		}, "already has a lane"},
+		{"the same source spelled another way", func(c *config) {
+			c.publishSource = "[2001:db8:59::10]"
+			c.publishLanes = []string{"2001:DB8:59:0::10=2001:db8:5a::a"}
+		}, "already has a lane"},
+		{"the first source with a port", func(c *config) {
+			c.publishSource = "[2001:db8:59::10]:0"
+			c.publishLanes = []string{"2001:db8:59::10=2001:db8:5a::a"}
+		}, "already has a lane"},
+		{"two added lanes on one source", func(c *config) {
+			c.publishSource = "2001:db8:59::10"
+			c.publishLanes = []string{"2001:db8:5a::10=2001:db8:5a::a", "[2001:db8:5a::10]=2001:db8:5a::b"}
+		}, "already has a lane"},
+		{"a lane that is not SOURCE=HOSTS", func(c *config) {
+			c.publishSource = "2001:db8:59::10"
+			c.publishLanes = []string{"2001:db8:5a::10"}
+		}, "is not SOURCE=HOSTS"},
 		{"unknown mode", func(c *config) { c.mode = "bogus" }, "-mode must be"},
 		{"decred verifier", func(c *config) { c.sigVerifier = "decred" }, ""},
 		{"sdk verifier", func(c *config) { c.sigVerifier = "sdk" }, ""},

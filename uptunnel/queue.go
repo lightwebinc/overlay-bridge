@@ -68,6 +68,15 @@ type Queue struct {
 	room   chan struct{}
 
 	enqueued, sent, shed, failed, waited atomic.Uint64
+	// failedAt is when this queue last failed a record (UnixNano; 0 = never):
+	// [Lanes] passes a lane over for a while after it.
+	failedAt atomic.Int64
+}
+
+// fail counts a record that did not reach the plane.
+func (q *Queue) fail() {
+	q.failed.Add(1)
+	q.failedAt.Store(time.Now().UnixNano())
 }
 
 // item is one queued record and what to run once it has actually been sent.
@@ -241,7 +250,7 @@ func (q *Queue) Run(ctx context.Context) error {
 			sent := it.sent
 			done := func(confirmed bool) {
 				if !confirmed {
-					q.failed.Add(1)
+					q.fail()
 					return
 				}
 				q.sent.Add(1)
@@ -250,7 +259,7 @@ func (q *Queue) Run(ctx context.Context) error {
 				}
 			}
 			if err := q.c.Send(ctx, it.rec, done); err != nil {
-				q.failed.Add(1)
+				q.fail()
 				if q.log != nil {
 					q.log.Error("up-tunnel publish failed; record is not on the plane", "err", err, "bytes", len(it.rec))
 				}

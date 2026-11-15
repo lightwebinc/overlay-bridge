@@ -105,13 +105,18 @@ func TestLoadSeriesArePresetAtZero(t *testing.T) {
 	q := uptunnel.NewQueue(&uptunnel.Client{}, 16, nil)
 	q.MaxBytes = 1024
 	rec := httptest.NewRecorder()
-	(&collector{feed: f, queue: q, timings: newTimings()}).handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	q2 := uptunnel.NewQueue(&uptunnel.Client{}, 16, nil)
+	q2.MaxBytes = 1024
+	(&collector{feed: f, publish: uptunnel.NewLanes(q, q2), publishLanes: []string{"fd00::1", "fd00::2"}, timings: newTimings()}).handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	for _, want := range []string{
 		"overlay_bridge_publish_queue_depth 0",
-		"overlay_bridge_publish_queue_capacity 16",
+		// Two lanes: the queue series are the lanes summed.
+		"overlay_bridge_publish_queue_capacity 32",
 		"overlay_bridge_publish_queue_bytes 0",
-		"overlay_bridge_publish_queue_bytes_capacity 1024",
+		"overlay_bridge_publish_queue_bytes_capacity 2048",
+		`overlay_bridge_publish_lane_sent_total{lane="fd00::1"} 0`,
+		`overlay_bridge_publish_lane_queue_bytes{lane="fd00::2"} 0`,
 		`overlay_bridge_publish_total{result="waited"} 0`,
 		"overlay_bridge_engine_queue_depth 0",
 		"overlay_bridge_engine_queue_capacity 32",

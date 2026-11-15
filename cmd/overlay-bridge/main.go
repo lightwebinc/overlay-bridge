@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"runtime"
@@ -55,6 +56,7 @@ type config struct {
 	shadowFacade  bool
 	engineRoutes  routeFlags
 	trusted       routeFlags // -facade-trusted values
+	publishLanes  routeFlags // -publish-lane values: SOURCE=HOSTS
 	engineTimeout time.Duration
 	engineWorkers int
 	engineQueue   int
@@ -135,6 +137,7 @@ func main() {
 	flag.StringVar(&c.edgeIngress, "edge-ingress", "", "up-tunnel hosts, comma list in failover order (side A then side B)")
 	flag.IntVar(&c.edgeBeefPort, "edge-beef-port", 8725, "the open ingress port")
 	flag.StringVar(&c.publishSource, "publish-source", "", "local source address for the up-tunnel; the slot inner the facade sources from")
+	flag.Var(&c.publishLanes, "publish-lane", "SOURCE=HOSTS: one more up-tunnel lane, for a consumer with several tunnels: its slot inner (the local source address) and its ingress hosts, a comma list in failover order. Repeatable. -edge-ingress with -publish-source is the first lane and each -publish-lane adds one; a record goes whole to the lane with the least queued. Every lane needs a source address of its own: the fabric numbers one source's records as one flow, and two connections from one address interleave it")
 	flag.IntVar(&c.publishQueue, "publish-queue", 1024, "records queued for the up-tunnel; a full queue waits -publish-wait for room, then sheds")
 	flag.Int64Var(&c.publishQBytes, "publish-queue-bytes", 256<<20, "also bound the publish queue by the bytes queued (0 = by -publish-queue alone); a record larger than the bound is carried alone, never refused for its size")
 	flag.DurationVar(&c.publishWait, "publish-wait", 2*time.Second, "how long a submission waits for room in a full publish queue before it is shed and answered 503 (0 = never: a full queue sheds at once)")
@@ -278,28 +281,46 @@ func run(c config, log *slog.Logger) error {
 		log.Info("facade submissions offered to the shadow")
 	}
 
-	// ---- up-tunnel and the facade.
-	var queue *uptunnel.Queue
+	// ---- up-tunnel and the facade. One lane (-edge-ingress, from
+	// -publish-source), and one more for each -publish-lane.
+	var publish *uptunnel.Lanes
+	var laneNames []string
 	if c.mode == "all" && c.edgeIngress != "" {
-		client := &uptunnel.Client{
-			Addrs:  ingressAddrs(c.edgeIngress, c.edgeBeefPort),
-			Prefer: c.publishPreferAfter,
-			Log:    log,
+		specs := []laneSpec{{source: c.publishSource, hosts: c.edgeIngress}}
+		for _, v := range c.publishLanes {
+			sp, _ := parseLane(v) // validated at start
+			specs = append(specs, sp)
 		}
-		if c.publishSource != "" {
-			// Assert the source exists locally rather than discovering at the
-			// first publish that own-traffic exclusion has been silently
-			// missing: a wrong source is delivered, billable egress plus a
-			// full verify per object, not a harmless duplicate.
-			addr, err := resolveSource(c.publishSource)
-			if err != nil {
-				return err
+		var queues []*uptunnel.Queue
+		for _, sp := range specs {
+			client := &uptunnel.Client{
+				Addrs:  ingressAddrs(sp.hosts, c.edgeBeefPort),
+				Prefer: c.publishPreferAfter,
+				Log:    log,
 			}
-			client.LocalAddr = addr
+			name := "default"
+			if sp.source != "" {
+				// Assert the source exists locally rather than discovering at the
+				// first publish that own-traffic exclusion has been silently
+				// missing: a wrong source is delivered, billable egress plus a
+				// full verify per object, not a harmless duplicate.
+				addr, err := resolveSource(sp.source)
+				if err != nil {
+					return err
+				}
+				client.LocalAddr = addr
+				name = sp.source
+			}
+			defer func() { _ = client.Close() }()
+			q := uptunnel.NewQueue(client, c.publishQueue, log)
+			q.MaxBytes, q.Wait = c.publishQBytes, c.publishWait
+			queues = append(queues, q)
+			laneNames = append(laneNames, name)
 		}
-		defer func() { _ = client.Close() }()
-		queue = uptunnel.NewQueue(client, c.publishQueue, log)
-		queue.MaxBytes, queue.Wait = c.publishQBytes, c.publishWait
+		publish = uptunnel.NewLanes(queues...)
+		if len(queues) > 1 {
+			log.Info("up-tunnel lanes", "lanes", len(queues), "sources", strings.Join(laneNames, ","))
+		}
 	}
 
 	tasks := newGroup(ctx)
@@ -322,8 +343,8 @@ func run(c config, log *slog.Logger) error {
 			topicSet[n] = struct{}{}
 		}
 		var pub facade.Publisher
-		if queue != nil {
-			pub = queue
+		if publish != nil {
+			pub = publish
 		}
 		var trusted []facade.TrustRule
 		for _, v := range c.trusted {
@@ -341,8 +362,8 @@ func run(c config, log *slog.Logger) error {
 		tasks.go_("facade", func(ctx context.Context) error { return fac.Serve(ctx, addr) })
 	}
 
-	if queue != nil {
-		tasks.go_("publish-queue", queue.Run)
+	if publish != nil {
+		tasks.go_("publish-queue", publish.Run)
 	}
 
 	// ---- lanes. MaxObject bounds RECORD bytes, not object bytes: the handler
@@ -375,7 +396,7 @@ func run(c config, log *slog.Logger) error {
 	if c.metricsAddr != "" {
 		col := &collector{
 			feed: f, guard: g, store: store, tracker: tracker,
-			facade: fac, queue: queue,
+			facade: fac, publish: publish, publishLanes: laneNames,
 			lanes:   []*lanes.Lane{beefLane, headerLane},
 			timings: tim,
 			verify:  vmode != feed.VerifyOff,
@@ -492,6 +513,32 @@ func (c config) validate() error {
 	if c.publishQBytes < 0 || c.publishWait < 0 {
 		return errors.New("-publish-queue-bytes and -publish-wait must be 0 (off) or more")
 	}
+	if len(c.publishLanes) > 0 {
+		if c.edgeIngress == "" || c.publishSource == "" {
+			return errors.New("-publish-lane adds lanes to the first one: set -edge-ingress and -publish-source too, so every lane has a source address of its own")
+		}
+		// Compared as addresses, not as text: "[2001:db8::10]" and
+		// "2001:DB8:0::10" are one source, and so one flow.
+		first, err := sourceAddr(c.publishSource)
+		if err != nil {
+			return fmt.Errorf("-publish-source: %w", err)
+		}
+		seen := map[netip.Addr]bool{first: true}
+		for _, v := range c.publishLanes {
+			sp, err := parseLane(v)
+			if err != nil {
+				return fmt.Errorf("-publish-lane: %w", err)
+			}
+			a, err := sourceAddr(sp.source)
+			if err != nil {
+				return fmt.Errorf("-publish-lane: %w", err)
+			}
+			if seen[a] {
+				return fmt.Errorf("-publish-lane %s: that source address already has a lane; two connections from one address are one flow on the fabric and interleave its sequence numbers", sp.source)
+			}
+			seen[a] = true
+		}
+	}
 	if _, err := feed.ParseVerifyMode(c.verifyMode); err != nil {
 		return fmt.Errorf("-verify: %w", err)
 	}
@@ -589,6 +636,21 @@ func warmStore(ctx context.Context, c config, store *headers.Store, log *slog.Lo
 	default:
 		log.Info("header warm-up done", attrs...)
 	}
+}
+
+// sourceAddr is the address a publish source names, read as resolveSource
+// reads it (brackets and a port are allowed), in one form: two spellings of
+// one address are the same source.
+func sourceAddr(s string) (netip.Addr, error) {
+	host := strings.Trim(s, "[]")
+	if h, _, err := net.SplitHostPort(s); err == nil {
+		host = h
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("%q is not an IP address", s)
+	}
+	return a.Unmap(), nil
 }
 
 // resolveSource turns -publish-source into a local address and asserts it
@@ -716,4 +778,24 @@ func serveMetrics(ctx context.Context, addr string, col *collector, log *slog.Lo
 	defer cancel()
 	_ = srv.Shutdown(shutdown)
 	return ctx.Err()
+}
+
+// laneSpec is one up-tunnel lane: the local source address it publishes from
+// ("" = the host's own choice, the first lane without -publish-source) and
+// its ingress hosts, a comma list in failover order.
+type laneSpec struct {
+	source, hosts string
+}
+
+// parseLane parses a -publish-lane value, SOURCE=HOSTS.
+func parseLane(v string) (laneSpec, error) {
+	source, hosts, ok := strings.Cut(v, "=")
+	source, hosts = strings.TrimSpace(source), strings.TrimSpace(hosts)
+	if !ok || source == "" || hosts == "" {
+		return laneSpec{}, fmt.Errorf("%q is not SOURCE=HOSTS", v)
+	}
+	if net.ParseIP(strings.Trim(source, "[]")) == nil {
+		return laneSpec{}, fmt.Errorf("%q: the source %q is not an IP address", v, source)
+	}
+	return laneSpec{source: strings.Trim(source, "[]"), hosts: hosts}, nil
 }
