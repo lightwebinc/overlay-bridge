@@ -30,10 +30,13 @@ type collector struct {
 	store   *headers.Store
 	tracker *headers.Tracker
 	facade  *facade.Facade
-	queue   *uptunnel.Queue
-	lanes   []*lanes.Lane
-	timings *timings
-	verify  bool
+	publish *uptunnel.Lanes
+	// publishLanes names each up-tunnel lane (its source address), in the
+	// order of publish's lanes.
+	publishLanes []string
+	lanes        []*lanes.Lane
+	timings      *timings
+	verify       bool
 	// config is the overlay_bridge_config_info label set, in descConfig's
 	// order; nil omits the series.
 	config []string
@@ -60,6 +63,10 @@ var (
 		"Records written to the up-tunnel and not yet confirmed by the ingress.", nil, nil)
 	descPeerClosed = prometheus.NewDesc("overlay_bridge_uptunnel_peer_closed_total",
 		"Up-tunnel connections the ingress closed or that failed under the bridge (EOF, reset, keepalive or user timeout).", nil, nil)
+	descLaneSent = prometheus.NewDesc("overlay_bridge_publish_lane_sent_total",
+		"Up-tunnel publications confirmed by the ingress host, by lane (the lane's source address; default = the first lane without -publish-source). Sums to overlay_bridge_publish_total{result=\"sent\"}.", []string{"lane"}, nil)
+	descLaneQueued = prometheus.NewDesc("overlay_bridge_publish_lane_queue_bytes",
+		"Bytes of the records queued for each up-tunnel lane. A record goes to the lane with the least queued, so a lane that holds more is the one draining slower.", []string{"lane"}, nil)
 	descQueueDepth = prometheus.NewDesc("overlay_bridge_publish_queue_depth",
 		"Instantaneous publish backlog. At overlay_bridge_publish_queue_capacity a submission waits -publish-wait for room, then is shed.", nil, nil)
 	descQueueCap = prometheus.NewDesc("overlay_bridge_publish_queue_capacity",
@@ -129,7 +136,7 @@ var (
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
 		descFeed, descSteak, descHeaders, descTip, descRoots, descFacade,
-		descQueue, descQueueDepth, descQueueCap, descQueueBytes, descQueueBytesCap, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
+		descQueue, descLaneSent, descLaneQueued, descQueueDepth, descQueueCap, descQueueBytes, descQueueBytesCap, descUnconfirmed, descPeerClosed, descGuard, descLane, descLaneBound, descLaneConns,
 		descBuild, descVerifyScripts, descMismatch, descShadow, descWarm, descWarmDuration, descConfig,
 		descEngineQueue, descEngineQueueCap, descEngineQueueBytes, descEngineQueueBytesCap, descWorkers, descWorkersBusy, descShedRoute, descShadowQueue, descShadowQueueCap,
 		descAlso, descAlsoQueue, descAlsoQueueCap,
@@ -334,8 +341,9 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		counter(ch, descFacade, s.PublishFailed, "publish_failed")
 		counter(ch, descFacade, s.Trusted, "trusted")
 	}
-	if c.queue != nil {
-		s := c.queue.Stats()
+	if c.publish != nil {
+		// The lanes summed: what the one lane reported when there was one.
+		s := c.publish.Stats()
 		counter(ch, descQueue, s.Enqueued, "enqueued")
 		counter(ch, descQueue, s.Sent, "sent")
 		counter(ch, descQueue, s.Shed, "shed")
@@ -348,6 +356,10 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		gauge(ch, descQueueBytesCap, float64(s.BytesCapacity))
 		gauge(ch, descUnconfirmed, float64(s.Unconfirmed))
 		counter(ch, descPeerClosed, s.PeerClosed)
+		for i, ls := range c.publish.LaneStats() {
+			counter(ch, descLaneSent, ls.Sent, c.publishLanes[i])
+			gauge(ch, descLaneQueued, float64(ls.Bytes), c.publishLanes[i])
+		}
 	}
 	if c.guard != nil {
 		gauge(ch, descGuard, float64(c.guard.Stats().Entries))
