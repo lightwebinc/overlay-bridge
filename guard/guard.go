@@ -14,9 +14,14 @@
 // straight back. So the feed marks [registry.Delivered] before the engine
 // submit: marking afterwards leaves a window in which the echo arrives before
 // the mark lands. The facade looks an inbound object up before forwarding it
-// and marks [registry.Submitted] only once the ingress has confirmed the
-// publication: a mark cannot be taken back, so marking on inbound would
-// strand an object whose publish failed for the life of the entry.
+// and marks [registry.Submitted] only once the up-tunnel counts the record
+// confirmed: the ingress host's TCP acknowledged its bytes and the connection
+// stayed up for the grace window (see the uptunnel package). That is not
+// end-to-end delivery: a record the ingress process read and lost before
+// emitting it is marked all the same, and its retry is dropped as a loop
+// until the entry expires. A mark cannot be taken back, so marking on
+// inbound would strand every object whose publish failed for the life of
+// the entry.
 //
 // # Identity is the delivered bytes, and that is safe only because nothing propagates
 //

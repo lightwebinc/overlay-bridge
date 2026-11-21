@@ -79,8 +79,10 @@ engine worker and `overlay_bridge_feed_shed_total` series only with an engine
 (`feed` and `all`). `-mode sink` still emits `overlay_bridge_feed_total` (a
 delivery on a topic in `-topics` counts as `outcome="sunk"`, any other as
 `unknown_topic`) and the header, tracker, guard, lane, build and config
-series, and the verify, engine submit and queue-wait histograms are present,
-empty, in every mode.
+series. The verify, engine submit and queue-wait histograms are registered in
+every mode and stay empty where nothing observes them: the verify histogram
+without `-verify`, the engine submit and queue-wait histograms without an
+engine (`-mode sink`).
 
 ## Alerting notes
 
