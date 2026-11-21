@@ -1,9 +1,9 @@
 # Configuration
 
 Every setting is a flag, so a unit file or a Helm `args` list is the whole
-configuration. The one exception is the broker token, which may come from
-`OVERLAY_BRIDGE_SUBSCRIPTION_TOKEN` so that it need not sit on a command line.
-`-version` prints the version and exits.
+configuration. The one exception is the subscription source token, which may
+come from `OVERLAY_BRIDGE_SUBSCRIPTION_TOKEN` so that it need not sit on a
+command line. `-version` prints the version and exits.
 
 ## Modes
 
@@ -28,7 +28,7 @@ it either way.
 | `-header-lane` | `[::]:9172` | as above |
 | `-topics` | none | the elected topic names; the bridge holds the only name map |
 | `-max-object` | codec default (64 MiB) | keep at or below the engine's own body limit |
-| `-subscription-url`, `-subscription-consumer` | none | when both are set, `-topics` is checked against the consumer's election at startup and a mismatch is logged as `TOPIC MISMATCH`. A broker that cannot be read is a warning, not a refusal |
+| `-subscription-url`, `-subscription-consumer` | none | the base URL of a [subscription source](contracts.md#the-subscription-source) and the consumer's id there. When both are set, `-topics` is checked against that consumer's subscription at startup and a mismatch is logged as `TOPIC MISMATCH`. A source that cannot be read is a warning, not a refusal |
 | `-subscription-token` | none | bearer token for that read; prefer the environment variable above |
 
 A delivered record for a topic not in `-topics` is counted `unknown_topic`

@@ -1,22 +1,24 @@
 // Package topics reconciles the bridge's elected topic list against what its
 // consumer is actually subscribed to.
 //
-// The gap this closes is a quiet one. A customer joins a topic in the portal;
-// the broker projects it and the edge picks it up on its next snapshot poll,
-// with no converge and no restart. The bridge's `-topics` is a PROCESS FLAG
-// and does not follow. So the plane starts delivering a topic the bridge then
-// discards, and every component reports itself healthy: the election is live,
-// the edge joined the band, the frames arrive here, and the objects die one
-// hop before they would have been useful.
+// The gap this closes is a quiet one. A topic joined at the consumer's
+// subscription source reaches the delivery edge with no restart. The bridge's
+// `-topics` is a PROCESS FLAG and does not follow. So the plane starts
+// delivering a topic the bridge then discards, and every component reports
+// itself healthy: the election is live, the edge joined the band, the frames
+// arrive here, and the objects die one hop before they would have been useful.
 //
 // At runtime that shows up as a rising unknown_topic counter, which an alert
 // watches. This is the same fact one step earlier, at startup, where an
 // operator who just restarted the unit is actually looking.
 //
-// It WARNS AND CONTINUES, never refuses. Refusing would turn a customer's
-// topic join into a bridge that will not start, which is a worse outage than a
-// topic that is not bridged: the un-bridged topic loses one topic's objects,
-// the refusal loses all of them.
+// It WARNS AND CONTINUES, never refuses. Refusing would turn a topic join into
+// a bridge that will not start, which is a worse outage than a topic that is
+// not bridged: the un-bridged topic loses one topic's objects, the refusal
+// loses all of them.
+//
+// The subscription source is any HTTP service that answers the contract in
+// docs/contracts.md ("The subscription source"); [Fetch] is its client.
 package topics
 
 import (
@@ -32,9 +34,10 @@ import (
 	"time"
 )
 
-// ID is the projected topic id: SHA-256 of the topic NAME. The broker projects
-// it so the edge never needs names, which is why a bridge holding names has to
-// derive it to compare at all.
+// ID is a topic's identifier: SHA-256 of the topic NAME, the BRC-148 topic
+// identifier a delivery record carries and the edge filters on. The edge never
+// needs names, which is why a bridge holding names has to derive it to compare
+// at all.
 func ID(name string) [32]byte { return sha256.Sum256([]byte(name)) }
 
 // Diff is what the bridge carries versus what its consumer is subscribed to.
@@ -75,12 +78,12 @@ func (d Diff) Describe() string {
 	}
 }
 
-// Compare diffs the bridge's own names against the consumer's projected ids.
+// Compare diffs the bridge's own names against the consumer's subscribed
+// topic identifiers.
 //
-// It compares IDS, not names, because ids are what the broker actually
-// projects and what the edge filters on. Comparing names would agree with a
-// broker that had renamed a topic under the same id, which is precisely the
-// case worth catching.
+// It compares IDENTIFIERS, not names, because the identifier is what the edge
+// filters on and what a delivery record carries, so a source that answers
+// names and one that answers identifiers are judged on the same terms.
 func Compare(bridged []string, subscribedIDs []string, allTopics bool) Diff {
 	byID := make(map[string]string, len(bridged))
 	for _, n := range bridged {
@@ -121,12 +124,14 @@ type Subscription struct {
 	AllTopics bool
 }
 
-// Fetch reads one consumer's projected subscription from the broker's state
-// API.
+// Fetch reads one consumer's subscription from a subscription source: GET
+// {base}/v1/state, with token (when set) as a bearer credential, and the
+// first entry in "consumers" whose "id" is consumerID. The contract is in
+// docs/contracts.md ("The subscription source"); any service can implement it.
 //
 // Read-only and best-effort by design: every failure here is reported to the
 // caller and none of them is fatal, because a bridge that refused to start
-// when the broker was briefly unreachable would convert a control-plane blip
+// when the source was briefly unreachable would convert a control-plane blip
 // into a data-plane outage.
 func Fetch(ctx context.Context, base, consumerID, token string, hc *http.Client) (Subscription, error) {
 	if hc == nil {
@@ -151,7 +156,7 @@ func Fetch(ctx context.Context, base, consumerID, token string, hc *http.Client)
 		return Subscription{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Subscription{}, fmt.Errorf("broker state: status %d", resp.StatusCode)
+		return Subscription{}, fmt.Errorf("subscription source: status %d", resp.StatusCode)
 	}
 	var state struct {
 		Consumers []struct {
@@ -163,14 +168,14 @@ func Fetch(ctx context.Context, base, consumerID, token string, hc *http.Client)
 		} `json:"consumers"`
 	}
 	if err := json.Unmarshal(body, &state); err != nil {
-		return Subscription{}, fmt.Errorf("broker state: %w", err)
+		return Subscription{}, fmt.Errorf("subscription source: %w", err)
 	}
 	for _, c := range state.Consumers {
 		if c.ID != consumerID {
 			continue
 		}
-		// The state API answers NAMES (it is the operator view); the edge
-		// seam answers ids. Derive so this compares ids either way.
+		// The source answers topic NAMES; the edge filters on identifiers.
+		// Derive, so this compares identifiers either way.
 		ids := make([]string, 0, len(c.Subscription.BeefTopics))
 		for _, n := range c.Subscription.BeefTopics {
 			id := ID(n)
@@ -178,5 +183,5 @@ func Fetch(ctx context.Context, base, consumerID, token string, hc *http.Client)
 		}
 		return Subscription{TopicIDs: ids, AllTopics: c.Subscription.AllBeefTopics}, nil
 	}
-	return Subscription{}, fmt.Errorf("broker state: consumer %s is not there", consumerID)
+	return Subscription{}, fmt.Errorf("subscription source: consumer %s is not there", consumerID)
 }
