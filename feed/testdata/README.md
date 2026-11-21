@@ -26,8 +26,9 @@ submission in the two `x-topics` spellings a client may send:
   trims each element; the Go server trims a leading space too, so the strict
   form is a courtesy there rather than a necessity.
 - **JSON array.** What go-sdk's own facilitator emits and what the TypeScript
-  host accepts. The Go server does not parse it: the whole bracketed string
-  becomes one topic name and the submit fails with a 500.
+  host accepts. The Go server at v1.3.5 did not parse it: the whole bracketed
+  string became one topic name and the submit failed with a 500. v1.3.8 and
+  v1.3.9 parse it.
 
 So a comma list with no spaces, in one header, is the form to send when the
 engine behind the door is unknown, and it is the only form this bridge sends.

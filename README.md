@@ -35,9 +35,9 @@ It is the application-tier sibling of
 bridges front the broadcaster tier and a mining Teranode cluster, this one
 fronts an overlay host: a delivery consumer of the application tier, never a
 miner, and nothing here carries miner entitlements. The shared landing-tier
-machinery (lane termination, byte-order discipline, redial and failover across
-the tunnel's primary and standby paths) is imported from teranode-bridge's
-public packages, never forked.
+machinery it uses (lane termination, and the bounded seen-set under the loop
+guard) is imported from teranode-bridge's public packages (`lanes`,
+`registry`), never forked.
 
 ## Documentation
 
@@ -56,7 +56,7 @@ public packages, never forked.
 
 ## Requirements
 
-- Go 1.26 or later
+- Go 1.26.2 or later
 - A released overlay services engine reachable as a bare origin
   ([ts-stack](https://github.com/bsv-blockchain/ts-stack) or
   [go-overlay-services](https://github.com/bsv-blockchain/go-overlay-services)),
@@ -103,10 +103,12 @@ are in [docs/configuration.md](docs/configuration.md).
 ├── topics/              # elected topic names and their identifiers
 ├── pkg/spv/             # SPV verifier and trust marker, reusable by a Go overlay engine
 ├── pkg/secpverify/      # the secp256k1 ECDSA verifier behind go-sdk's hooks (-sig-verifier)
+├── internal/testpiece/  # test and benchmark fixture: a storage piece carrier BEEF
+├── tests/tpnil/         # TPNIL qualification tests (build tag tpnil): the overlay delivery contract, the BRC-22 submit boundary
 ├── docs/                # architecture, configuration, spv, shadow, also, header-feeder, deliver-once, contracts, references/
 ├── Dockerfile
 ├── Makefile
-└── .github/workflows/{ci,codeql,image-publish,release,vuln}.yml
+└── .github/workflows/{ci,codeql,image-publish,release,scorecard,vuln,workflow-lint}.yml
 ```
 
 ## Observability
