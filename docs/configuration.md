@@ -156,7 +156,7 @@ whether the lane rather than a third party is feeding verification. Only
 
 `-publish-source` is checked at startup against the machine's own addresses.
 Publishing from an address this host does not carry defeats the fabric's
-own-traffic exclusion, so our own objects come back to us: billable egress and
+own-traffic exclusion, so our own objects come back to us: delivery bandwidth and
 a full verification per object before the engine's duplicate check discards
 it. That failure is silent, hence a startup check.
 
