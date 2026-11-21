@@ -11,7 +11,7 @@ configuration. The one exception is the broker token, which may come from
 | --- | --- | --- |
 | `sink` | lanes only: terminate, count, discard | burn-in a slot before an engine exists |
 | `feed` | lanes plus engine submits | delivery only, no publishing |
-| `all` | everything, including the facade and the up-tunnel | normal |
+| `all` | everything, including the facade and the up-tunnel | normal; the default |
 
 `sink` needs no engine, anchor or topics. The other modes need all three, and
 the bridge refuses to start without them rather than discovering at the first
@@ -45,7 +45,7 @@ subscription and this configuration have drifted apart, so alert on it.
 | `-engine-queue` | `256` | deliveries queued behind the workers. A full queue sheds: the delivery is counted, logged and refused, and the host misses that object until its own catch-up finds it |
 | `-engine-queue-bytes` | `0` | also bound the queue by the bytes of the objects in it (0: by `-engine-queue` alone). Memory is what a queue costs, so a deep `-engine-queue` with a byte bound rides out a burst of small objects and stays bounded for large ones |
 | `-stop-drain` | `30s` | at stop (SIGTERM), how long the workers keep submitting the objects already queued before the bridge exits. The lane delivered them, so nothing upstream sends them again; a restart without the drain dropped every one of them. The service's stop timeout must exceed it |
-| `-engine-retries` | `4` | retries for a failed submit before the object is dropped; `-1` disables |
+| `-engine-retries` | `4` | retries for a failed submit before the object is dropped; `-1` disables, `0` takes the default |
 
 Every engine client (the primary, routes, shadows, the facade) shares one
 connection pool that keeps up to 256 idle connections per engine, so the
