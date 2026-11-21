@@ -195,7 +195,12 @@ func (f *Facade) Handler() http.Handler {
 func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	topics, err := ParseTopics(r.Header.Values("x-topics"))
+	// The one request header read here, by its canonical name: x-topics
+	// carries topic names and never a credential, and naming it keeps every
+	// other header (Authorization, Cookie) out of everything downstream,
+	// the log lines that name a topic included. It is the slice
+	// Header.Values("x-topics") returns, so a repeated header is still seen.
+	topics, err := ParseTopics(r.Header["X-Topics"])
 	if err != nil {
 		f.bump(&f.malformed)
 		httpError(w, http.StatusBadRequest, err.Error())
@@ -352,7 +357,7 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 			// would tell a client it published when it did not, which is the
 			// one thing a publish interface must never do; the local
 			// admittance is real but it is not what was asked for. A shed
-			// object is not billed, and this path books no delivered egress.
+			// object is not on the plane, and this path never counts it sent.
 			f.bump(&f.publishFailed)
 			f.logf("facade: publish failed; object is not on the plane", "topic", name, "err", err)
 			w.Header().Set("Retry-After", "1")

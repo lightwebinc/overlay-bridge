@@ -1,8 +1,9 @@
 # Contracts
 
 What this bridge relies on in the two released engines, each point checked
-against a running engine rather than read out of its source, and the two
-questions still open.
+against a running engine rather than read out of its source; the two HTTP
+contracts it has with other services (the header read API it serves and the
+subscription source it can read); and the two questions still open.
 
 ## The submit request
 
@@ -148,6 +149,68 @@ route, and the route never fills one in.
 `merkleRoot` is the SDK's **display hex**. A byte-reversed or `0x`-prefixed
 rendering fails every comparison in every consumer while the service goes on
 answering 200.
+
+## The subscription source
+
+An optional read at startup. With `-subscription-url` and
+`-subscription-consumer` set, the bridge asks a subscription source which
+topics its consumer is subscribed to and logs any difference from `-topics`
+([configuration](configuration.md#lanes-and-topics)). Any service that holds
+consumer subscriptions can implement it by answering one request.
+
+### Request
+
+One request, once, before the lanes open; it is not retried.
+
+| Element | Value |
+| --- | --- |
+| Method and path | `GET {base}/v1/state`. `{base}` is `-subscription-url` with any trailing `/` removed; a path in it is kept, so `https://source.example/api` is read as `https://source.example/api/v1/state` |
+| `Accept` | `application/json` |
+| `Authorization` | `Bearer {token}` when a token is set: `-subscription-token`, or `OVERLAY_BRIDGE_SUBSCRIPTION_TOKEN` when the flag is empty. No header otherwise |
+| Body | none |
+| Timeout | 10 s |
+
+The token is a bearer credential, so serve the source over HTTPS when one is
+set. The bridge sends it only in that header and never logs it.
+
+### Response
+
+Status 200 and a JSON body, of which at most 32 MiB is read. The bridge reads
+only these fields and ignores any others, so a source may serve a wider
+document, and may list only the consumer it is asked about:
+
+```json
+{
+  "consumers": [
+    {
+      "id": "consumer-a",
+      "subscription": {
+        "beefTopics": ["tm_example", "tm_other"],
+        "allBeefTopics": false
+      }
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `consumers[].id` | the consumer's id, compared exactly with `-subscription-consumer`; the first match is used |
+| `subscription.beefTopics` | the topic NAMES the consumer is subscribed to on the BEEF object plane. Each is compared by its identifier (SHA-256 of the name, as a delivery record carries it), so a name must be spelled exactly as the topic's name |
+| `subscription.allBeefTopics` | `true` when the consumer receives every topic on the plane. No finite `-topics` list can match that, so it is always reported as a mismatch |
+
+An entry with no `subscription` reads as subscribed to nothing.
+
+### Outcomes
+
+Each outcome is one log line, and none of them stops the bridge:
+
+| Outcome | Log line |
+| --- | --- |
+| `-subscription-url` or `-subscription-consumer` is not set | `topic reconciliation is OFF` (info) |
+| no answer, a status other than 200, a body that is not this JSON, or no entry for the consumer | `topic reconciliation could not read the subscription source` (warning); the bridge starts with `-topics` as given |
+| every subscribed topic is in `-topics` | `topics reconciled with the consumer's election` (info); topics in `-topics` the consumer is not subscribed to are listed there as harmless |
+| a subscribed topic is not in `-topics`, or `allBeefTopics` is `true` | `TOPIC MISMATCH: this bridge is discarding objects the plane is delivering` (warning); its `detail` names the missing topics by identifier, or the all-topics posture |
 
 ## Outcome vocabulary
 

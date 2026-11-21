@@ -13,10 +13,13 @@ import (
 // says so, loudly, at startup.
 //
 // WARN AND CONTINUE, never refuse. A mismatch loses one topic's objects; a
-// refusal loses every topic's, and it converts a customer's self-service topic
-// join into a bridge that will not start. The runtime counter and its alert
-// remain the authority; this is the same fact delivered at the moment an
-// operator is actually looking at the unit.
+// refusal loses every topic's, and it converts a topic joined at the
+// subscription source into a bridge that will not start. The runtime counter
+// and its alert remain the authority; this is the same fact delivered at the
+// moment an operator is actually looking at the unit.
+//
+// The source is any service that answers the subscription source contract in
+// docs/contracts.md. The token is sent to it and never logged.
 //
 // When the check is not configured it says THAT too. A silent absence and a
 // silent pass look identical in a log, and the whole point of this function is
@@ -39,7 +42,7 @@ func reconcileTopics(ctx context.Context, c config, names []string, log *slog.Lo
 	sub, err := topics.Fetch(rctx, c.subURL, c.subID, token, nil)
 	if err != nil {
 		// Not fatal: a control-plane blip must not become a data-plane outage.
-		log.Warn("topic reconciliation could not read the broker",
+		log.Warn("topic reconciliation could not read the subscription source",
 			"err", err, "consumer", c.subID,
 			"consequence", "starting anyway with -topics as given, unreconciled")
 		return
@@ -55,5 +58,5 @@ func reconcileTopics(ctx context.Context, c config, names []string, log *slog.Lo
 		"consumer", c.subID,
 		"detail", d.Describe(),
 		"fix", "add the topic to -topics and restart this unit",
-		"alert", "OverlayBridgeUnknownTopic")
+		"watch", `overlay_bridge_feed_total{outcome="unknown_topic"}`)
 }

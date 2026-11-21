@@ -49,7 +49,7 @@ guard) is imported from teranode-bridge's public packages (`lanes`,
 - [Deliver once](docs/deliver-once.md): one delivery slot per landing site, and how a site that runs several bridges fans out locally
 - [Also targets](docs/also.md): hand a route's topics to a second local service beside the engine (`also=` on `-engine-route`), from the same subscription, without slowing the primary
 - [Metrics reference](docs/references/prometheusMetrics.md): every `overlay_bridge_*` series, its labels and meaning
-- [Contracts and open items](docs/contracts.md): what has been proven against the released engines, and what is not yet settled
+- [Contracts and open items](docs/contracts.md): what has been proven against the released engines, the header read API, the subscription source a bridge can check `-topics` against, and what is not yet settled
 - [BRC-148](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0148.md) and [BRC-149](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0149.md): the BEEF object plane and the delivery record the object lane carries
 - [BRC-135](https://github.com/bsv-blockchain/BRCs/blob/master/transactions/0135.md): the block-header frame the header lane carries
 - [BRC-22](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0022.md) and [BRC-24](https://github.com/bsv-blockchain/BRCs/blob/master/overlays/0024.md): the engine's submit and lookup interfaces
