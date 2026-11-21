@@ -126,8 +126,8 @@ func NewQueue(c *Client, depth int, log *slog.Logger) *Queue {
 // Publish returns.
 //
 // The caller owns the decision about what a refusal means to its own client.
-// The standing ruling is that a shed object is NOT billed, so whatever status a
-// caller returns must not book delivered egress for it.
+// A shed record never reached the plane, so whatever status a caller returns
+// must not count it as published.
 func (q *Queue) Publish(ctx context.Context, record []byte, sent func()) error {
 	if err := ctx.Err(); err != nil {
 		return err

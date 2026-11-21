@@ -357,7 +357,7 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 			// would tell a client it published when it did not, which is the
 			// one thing a publish interface must never do; the local
 			// admittance is real but it is not what was asked for. A shed
-			// object is not billed, and this path books no delivered egress.
+			// object is not on the plane, and this path never counts it sent.
 			f.bump(&f.publishFailed)
 			f.logf("facade: publish failed; object is not on the plane", "topic", name, "err", err)
 			w.Header().Set("Retry-After", "1")

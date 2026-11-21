@@ -4,7 +4,7 @@
 # at /usr/local/bin/overlay-bridge on a distroless nonroot base.
 #
 # The builder is pinned by digest and is a LATER toolchain than go.mod's floor.
-# The floor is held fleet-wide on purpose, while the stdlib actually shipped
+# The floor is held project-wide on purpose, while the stdlib actually shipped
 # comes from here, so scanning sees what we ship rather than what we compile
 # against.
 #

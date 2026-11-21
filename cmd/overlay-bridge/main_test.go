@@ -141,7 +141,7 @@ func TestIngressAddrsAppliesTheDefaultPort(t *testing.T) {
 // TestResolveSourceRefusesAnAddressWeDoNotHold pins the assertion that matters:
 // publishing from an address this machine does not carry means own-traffic
 // exclusion never matches, so the fabric delivers our own objects back to us.
-// That is billable egress plus a full verify per object, not a harmless
+// That is a delivery back plus a full verify per object, not a harmless
 // duplicate, and it is silent, so it is caught at startup instead.
 func TestResolveSourceRefusesAnAddressWeDoNotHold(t *testing.T) {
 	if _, err := resolveSource("192.0.2.123"); err == nil {

@@ -32,9 +32,9 @@
 // delivery by deriving a key from the source address it observes, so a
 // submission that leaves from the wrong source is delivered back to us: a full
 // recursive SPV verify per object inside the engine before its duplicate check
-// discards it, and billable egress on the way in. Left unpinned, the source is
-// whatever the host's address selection picks on a machine that also carries a
-// fleet interface and an endpoint plane.
+// discards it, and delivery bandwidth spent carrying it back. Left unpinned,
+// the source is whatever the host's address selection picks on a machine that
+// also carries a management interface and an endpoint plane.
 //
 // # A written record is not a sent record
 //
@@ -62,7 +62,7 @@
 //
 // Resending is safe because the plane is idempotent per record: the ingress
 // claims SHA-256(ContentID ‖ TopicID) in its object-plane dedup store before
-// emitting (fleet-wide when the shared dedup tier is configured), listeners
+// emitting (plane-wide when the shared dedup tier is configured), listeners
 // claim the same pair at egress, and the engine answers a duplicate with an
 // empty admittance. Resending only what is unconfirmed keeps duplicates to the
 // rare record the peer read but whose acknowledgement was lost with the
@@ -114,7 +114,7 @@ type Client struct {
 	// Addrs are host:port slot inners in failover order, side A then side B.
 	Addrs []string
 	// LocalAddr pins the source address of every dial. See the package docs:
-	// the wrong source costs a verify and billable egress per object.
+	// the wrong source costs a verify and a delivery back per object.
 	LocalAddr *net.TCPAddr
 	// Prefer returns to Addrs[0] after this long away from it. Zero is sticky
 	// failover, which is not the landing posture.
