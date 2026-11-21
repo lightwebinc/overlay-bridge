@@ -195,7 +195,12 @@ func (f *Facade) Handler() http.Handler {
 func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	topics, err := ParseTopics(r.Header.Values("x-topics"))
+	// The one request header read here, by its canonical name: x-topics
+	// carries topic names and never a credential, and naming it keeps every
+	// other header (Authorization, Cookie) out of everything downstream,
+	// the log lines that name a topic included. It is the slice
+	// Header.Values("x-topics") returns, so a repeated header is still seen.
+	topics, err := ParseTopics(r.Header["X-Topics"])
 	if err != nil {
 		f.bump(&f.malformed)
 		httpError(w, http.StatusBadRequest, err.Error())
