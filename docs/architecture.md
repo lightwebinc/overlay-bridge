@@ -84,7 +84,9 @@ real admittance instructions, and then published once onto the plane.
 ## up-tunnel
 
 Records leave over one long-lived TCP connection to the edge ingress, side A
-then side B. The record stream is one-way, so a successful write proves only
+then side B; a consumer with several tunnels publishes over one such
+connection per tunnel ([several lanes](configuration.md#several-lanes)). The
+record stream is one-way, so a successful write proves only
 that the local kernel took the bytes. A record counts as sent
 (`overlay_bridge_publish_total{result="sent"}`) once the ingress host has
 acknowledged it and the connection has then stayed up for a short grace
@@ -100,8 +102,12 @@ it is not visible to the bridge.
 
 ## guard
 
-A bounded seen-set keyed on SHA-256(ContentID ‖ TopicID), the same key the
-fabric's own ingress claims an object under. Both sides mark before they act.
+A bounded seen-set keyed on SHA-256(ContentID ‖ TopicID), the shape of the
+key the fabric's own ingress claims an object under (the bridge's ContentID is
+over the object, the fabric's over the whole submission record). The feed
+marks an object before it submits it. The facade looks an object up before it
+forwards it and marks it only once its publication is confirmed, so a publish
+that failed can be retried.
 
 **This is sound only while the engine does not propagate.** An engine
 re-serializes what it propagates, so an HTTPS propagation echo of our own
@@ -112,9 +118,9 @@ decision; it is not a configuration change.
 
 ## Dependencies
 
-- [`github.com/lightwebinc/teranode-bridge`](https://github.com/lightwebinc/teranode-bridge): the shared landing-tier packages (lane termination, failover)
+- [`github.com/lightwebinc/teranode-bridge`](https://github.com/lightwebinc/teranode-bridge): the shared landing-tier packages (`lanes`, lane termination; `registry`, the seen-set under the loop guard)
 - [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common): the push object-frame codecs, including the BRC-149 delivery record
-- [`github.com/bsv-blockchain/go-sdk`](https://github.com/bsv-blockchain/go-sdk): BEEF parsing and block-header hashing
+- [`github.com/bsv-blockchain/go-sdk`](https://github.com/bsv-blockchain/go-sdk): BEEF parsing, and the merkle path and script interpreter `pkg/spv` verifies with
 - [`github.com/prometheus/client_golang`](https://github.com/prometheus/client_golang): metrics
 - [`github.com/decred/dcrd/dcrec/secp256k1/v4`](https://github.com/decred/dcrd/tree/master/dcrec/secp256k1): the secp256k1 ECDSA verifier behind go-sdk's hooks (`pkg/secpverify`, `-sig-verifier`)
 

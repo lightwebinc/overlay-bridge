@@ -6,16 +6,17 @@
 // what it read back to its own host would publish a loop. The guard is the
 // bounded seen-set that stops it.
 //
-// # Both sides mark, and both mark BEFORE they act
+// # Both sides mark: the feed before it acts, the facade once it has published
 //
 // A client publish is never delivered by the feed, so a feed-only guard cannot
 // recognise a re-publish of a client's own object; and the object the feed
 // delivered is exactly the one a naive application is most likely to hand
 // straight back. So the feed marks [registry.Delivered] before the engine
-// submit, and the facade marks [registry.Submitted] on inbound before
-// forwarding. Marking before acting is the whole trick and the only ordering
-// that works: marking afterwards leaves a window in which the echo arrives
-// before the mark lands.
+// submit: marking afterwards leaves a window in which the echo arrives before
+// the mark lands. The facade looks an inbound object up before forwarding it
+// and marks [registry.Submitted] only once the ingress has confirmed the
+// publication: a mark cannot be taken back, so marking on inbound would
+// strand an object whose publish failed for the life of the entry.
 //
 // # Identity is the delivered bytes, and that is safe only because nothing propagates
 //

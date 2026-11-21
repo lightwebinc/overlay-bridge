@@ -116,7 +116,7 @@ func main() {
 	flag.IntVar(&c.alsoQueue, "also-queue", 1024, "objects queued for each also= route target; a full queue sheds, never blocks the primary")
 	flag.Int64Var(&c.alsoBytes, "also-queue-bytes", 256<<20, "bytes queued or in flight for each also= route target; past it the next object is shed")
 	flag.BoolVar(&c.shadowFacade, "shadow-facade", false, "also offer the facade's accepted submissions to the topic's shadow, so the publishing host counts parity on what it publishes")
-	flag.Var(&c.engineRoutes, "engine-route", "GLOB=PRIMARY[,shadow=SHADOW]: the topics GLOB names submit to PRIMARY (a bare origin) with SHADOW as their shadow, instead of -engine and -shadow-engine; repeatable, first match wins")
+	flag.Var(&c.engineRoutes, "engine-route", "GLOB=PRIMARY[,shadow=SHADOW][,also=TARGET]...: the topics GLOB names submit to PRIMARY (a bare origin) with SHADOW as their shadow, instead of -engine and -shadow-engine, and each object is also handed to every TARGET; repeatable, first match wins")
 	flag.DurationVar(&c.engineTimeout, "engine-timeout", 30*time.Second, "per-submit ceiling")
 	flag.IntVar(&c.engineWorkers, "engine-workers", 4, "concurrent engine submits; the lane never waits on the engine")
 	flag.IntVar(&c.engineQueue, "engine-queue", 256, "deliveries queued behind the workers; a full queue sheds")

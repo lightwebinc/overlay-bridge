@@ -27,8 +27,9 @@ of a second host.
 Three details of the chaintracks shape are load-bearing:
 
 1. **The prefix carries the `/chaintracks` segment.** The client's own default
-   is `/chaintracks/v2`, not `/v2`. Serving only `/v2` satisfies nothing. An
-   operator who wants a different prefix sets it on both sides.
+   is `/chaintracks/v2`, not `/v2`. Serving only `/v2` satisfies nothing. The
+   bridge binary serves the default and has no flag for another, so the host
+   keeps its client's default.
 2. **`merkleRoot` and `hash` are compared as STRINGS** by the caller, which
    fetches the header for a height and compares its root against the one it
    holds. The rendering must therefore be the display hex exactly: no byte

@@ -1,13 +1,16 @@
 // Package feed turns delivered BRC-149 records into ordinary engine submits.
 //
 // It is the lane handler for objfmt.ClassBEEFDelivery. Each record carries the
-// identifier of the topic that matched, the object's length, and the BEEF
-// object verbatim. The feed splits on the explicit length, maps the identifier
-// back to the name the host elected, and submits the object to the engine on
-// the interface the engine already serves. What happens next is what happens
-// for any client: the engine parses, verifies by SPV against its chain
-// tracker, runs the topic manager, stores admitted outputs, notifies lookup
-// services, and answers with admittance instructions.
+// identifier of the topic that matched, the payload's length, and the payload
+// verbatim: the publisher's submission record (every topic name it wrote, then
+// the BEEF object) or, from an older edge, the bare object. The feed splits on
+// the explicit length, unwraps the payload, maps the identifier back to the
+// name the host elected, and submits the object to the engine under that name
+// and under every other elected name in the record, on the interface the
+// engine already serves. What happens next is what happens for any client:
+// the engine parses, verifies by SPV against its chain tracker, runs the topic
+// manager, stores admitted outputs, notifies lookup services, and answers
+// with admittance instructions.
 //
 // # The lane is open, so nothing here trusts it
 //

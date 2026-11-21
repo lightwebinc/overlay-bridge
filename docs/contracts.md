@@ -12,7 +12,7 @@ One form is accepted by both engines, and the bridge sends only that form:
 | --- | --- | --- |
 | Method and path | `POST {base}/submit` | The base is a bare origin. The TypeScript host mounts on the app root and cannot be given a prefix; the Go server mounts under `/api/v1` and answers 404 at the root |
 | `Content-Type` | `application/octet-stream` | The TypeScript host's raw body parser is bound to exactly this type; anything else yields an empty body and a 400. The Go engine's size limiter engages only on it |
-| `x-topics` | one name, no spaces, sent once | The Go server reads a JSON array as one topic name and answers 500. It trims a leading space and combines repeated headers; the TypeScript host refuses a repeated header. One plain name in one header is the form neither can misread |
+| `x-topics` | one name, no spaces, sent once | The Go server at 1.3.5 read a JSON array as one topic name and answered 500 (1.3.8 and 1.3.9 parse one; `tests/tpnil/brc22` replays that boundary). It trims a leading space and combines repeated headers; the TypeScript host refuses a repeated header. One plain name in one header is the form neither can misread |
 | Body | the object verbatim | |
 
 The bridge refuses a topic containing a space or a comma before it sends
@@ -38,14 +38,22 @@ but encoding that type back out produces Go field names, and a client reading
 200 and no error anywhere. Verified byte-identical against `@bsv/overlay`
 v2.3.1.
 
-**A publish that does not happen is a 503.** When the publish queue has no room
-within `-publish-wait` or the plane is unreachable, the object is not on the
-plane, so the facade answers 503 with `Retry-After` and the client requeues.
-The local admittance is real, but it is not what the client asked for, and
-answering 200 is the one thing a publish interface must never do. This is safe
+**A publish the queue cannot take is a 503.** When the publish queue has no room
+within `-publish-wait`, the object is not on the plane, so the facade answers
+503 with `Retry-After` and the client requeues. The local admittance is real,
+but it is not what the client asked for, and answering 200 to a publish that
+was refused is the one thing a publish interface must never do. This is safe
 because a failed publish is retryable: the loop guard is marked only after a
 publish succeeds, and the fabric ingress drops a second identical submission in
 flight.
+
+Acceptance into the queue is not publication. A queued record is sent after
+the client has its 200; if the ingress cannot be reached, or the record is
+lost after its resends, it is counted
+`overlay_bridge_publish_total{result="failed"}` and logged, the client is not
+told, and the loop guard stays unmarked, so a later submission of the same
+object is published. An unreachable plane therefore shows as `failed`, and as
+503 only once the queue has filled behind it.
 
 ## Proven against the released engines
 
@@ -122,7 +130,9 @@ malformed hash is **400**, which is not the same as "I do not hold it".
 
 `GET /chaintracks/v2/height` and `GET /chaintracks/v2/header/height/{height}`,
 for a stock host that can only be pointed at a header service by
-configuration. The prefix is overridable.
+configuration. The bridge binary serves this prefix and has no flag to change
+it; a program embedding the package overrides it with
+`headers.API.ChaintracksPrefix`.
 
 ```json
 {"height": 101}
