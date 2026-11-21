@@ -3,6 +3,7 @@
 Every setting is a flag, so a unit file or a Helm `args` list is the whole
 configuration. The one exception is the broker token, which may come from
 `OVERLAY_BRIDGE_SUBSCRIPTION_TOKEN` so that it need not sit on a command line.
+`-version` prints the version and exits.
 
 ## Modes
 
@@ -14,7 +15,10 @@ configuration. The one exception is the broker token, which may come from
 
 `sink` needs no engine, anchor or topics. The other modes need all three, and
 the bridge refuses to start without them rather than discovering at the first
-delivered object that it has nowhere to put it.
+delivered object that it has nowhere to put it. A sink given `-topics` counts
+a delivery on one of them `sunk`; without `-topics` every delivery is counted
+`unknown_topic` and logged, and the lane's own object and byte counters count
+it either way.
 
 ## Lanes and topics
 
@@ -202,7 +206,7 @@ downstream, that port is still one port.
 | --- | --- | --- |
 | `-facade-listen` | `[::]:9175` | the client-facing submit listener; empty disables it |
 | `-facade-trusted` | (none) | `GLOB=CIDR[,CIDR]`: a submission on a topic the glob names, from a source in one of the CIDRs, is published without the local route (no engine, no shadow, no also target, no check) and answered as an admitted object. For a storage node's own gateway, whose provider already holds every piece in process. Repeatable; needs `-mode all` and `-facade-listen`, and the bridge refuses to start otherwise. List only this host's own addresses |
-| `-headers-listen` | `[::]:9178` | the chain-tracker read API |
+| `-headers-listen` | `[::]:9178` | the chain-tracker read API, on one address or a comma list of them; empty disables it |
 | `-metrics-addr` | `[::]:9179` | `/metrics`, `/healthz`, `/readyz`; empty disables it |
 | `-stats-every` | `1m` | interval of the stats log line; `0` is off |
 | `-pprof-listen` | (none) | a loopback `host:port` (`127.0.0.1`, `::1` or `localhost`) serving `net/http/pprof` under `/debug/pprof/`; empty is off |
