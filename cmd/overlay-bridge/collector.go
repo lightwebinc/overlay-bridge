@@ -40,6 +40,8 @@ type collector struct {
 	// config is the overlay_bridge_config_info label set, in descConfig's
 	// order; nil omits the series.
 	config []string
+	// interest is the topic interest announcer; nil when it is off.
+	interest *announcer
 }
 
 var (
@@ -143,6 +145,9 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	} {
 		ch <- d
 	}
+	if c.interest != nil {
+		c.interest.describe(ch)
+	}
 }
 
 func counter(ch chan<- prometheus.Metric, d *prometheus.Desc, v uint64, labels ...string) {
@@ -219,6 +224,9 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	gauge(ch, descBuild, 1, ver, sc, sdk, runtime.Version())
 	if c.config != nil {
 		gauge(ch, descConfig, 1, c.config...)
+	}
+	if c.interest != nil {
+		c.interest.collect(ch)
 	}
 
 	if c.feed != nil {
