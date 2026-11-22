@@ -226,34 +226,82 @@ func (a *announcer) sendError(err error) {
 		"fix", "check the route from -interest-bind to -interest-upstream")
 }
 
-// watch logs when an edge stops answering, and when it answers again. While
-// every edge is silent each topic keeps its last answer, so without this a
-// bridge whose edge has gone would say nothing. An idle bridge sends only
-// at each refresh, so a silent edge is noticed then.
+// watch logs what the edges' silence means.
+//
+// Every edge silent is a warning: nothing the bridge announces is applied,
+// what the edges hold for it lapses when its lifetime runs out, and each
+// topic keeps its last answer meanwhile, so without this line a bridge whose
+// edge has gone would say nothing.
+//
+// One edge silent while another answers is not. A standby edge holds no
+// record of a consumer it is not delivering to, so it stays silent until
+// delivery moves to it, and the edge that delivered goes silent once delivery
+// has moved away. A warning there would fire on every bridge that names both
+// of its edges, as it should, and teach its operator to ignore the one that
+// matters. So each such edge gets one line at Info.
+//
+// An idle bridge sends only at each refresh, so a silence is noticed then.
 func (a *announcer) watch(ctx context.Context) {
 	t := time.NewTicker(a.watchEvery)
 	defer t.Stop()
-	down := map[netip.AddrPort]bool{}
+	answered := map[netip.AddrPort]bool{} // has answered at least once
+	silent := map[netip.AddrPort]bool{}   // its silence has been noted
+	noneAnswers := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		for _, u := range a.client.Upstreams() {
+		ups := a.client.Upstreams()
+		reachable, quiet := 0, 0
+		for _, u := range ups {
 			switch {
-			case u.Reachable && down[u.Addr]:
-				down[u.Addr] = false
-				a.log.Info("topic interest: the edge answers again", "upstream", u.Addr.String())
-			case !u.Reachable && u.Stats.Timeouts >= 3 && !down[u.Addr]:
-				down[u.Addr] = true
-				a.log.Warn("TOPIC INTEREST: the edge does not answer", "upstream", u.Addr.String(),
-					"consequence", "what it holds for this bridge lapses when its lifetime runs out",
-					"fix", "check that the edge listens for interest and that the tunnel passes it")
+			case u.Reachable:
+				reachable++
+			case isSilent(u):
+				quiet++
 			}
 		}
+		for _, u := range ups {
+			addr := u.Addr.String()
+			switch {
+			case u.Reachable:
+				if silent[u.Addr] {
+					a.log.Info("topic interest: the edge answers", "upstream", addr)
+				}
+				silent[u.Addr], answered[u.Addr] = false, true
+			case isSilent(u) && !silent[u.Addr]:
+				silent[u.Addr] = true
+				switch {
+				case reachable == 0:
+					// The warning below says it for every edge at once.
+				case answered[u.Addr]:
+					a.log.Info("topic interest: an edge stopped answering while another answers",
+						"upstream", addr, "consequence", "the edge that answers holds this bridge's interest")
+				default:
+					a.log.Info("topic interest: an edge does not answer while another does, as a standby edge does until delivery moves to it",
+						"upstream", addr)
+				}
+			}
+		}
+		all := len(ups) > 0 && quiet == len(ups)
+		if all && !noneAnswers {
+			names := make([]string, 0, len(ups))
+			for _, u := range ups {
+				names = append(names, u.Addr.String())
+			}
+			a.log.Warn("TOPIC INTEREST: no edge answers", "upstreams", strings.Join(names, ","),
+				"consequence", "nothing this bridge announces is applied, and what the edges hold for it lapses when its lifetime runs out",
+				"fix", "check that the edges listen for interest and that the tunnel passes it")
+		}
+		noneAnswers = all
 	}
 }
+
+// isSilent reports an upstream that has stopped answering, or never has:
+// three timeouts in a row and nothing heard since.
+func isSilent(u interest.UpstreamInfo) bool { return !u.Reachable && u.Stats.Timeouts >= 3 }
 
 var (
 	descInterestTopics = prometheus.NewDesc("overlay_bridge_interest_topics",

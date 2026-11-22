@@ -308,9 +308,113 @@ func TestAnnouncerSaysWhenTheEdgeStopsAnswering(t *testing.T) {
 	// Something to say, so that the silence is noticed now and not at the
 	// next refresh.
 	a.client.Add(interest.TopicID(objfmt.TopicID("tm_b")))
-	waitFor(t, &logs, "the edge does not answer")
+	waitFor(t, &logs, "TOPIC INTEREST: no edge answers")
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("serve: %v", err)
+	}
+}
+
+// startTestEdge runs a real receiver on the IPv6 loopback until stop is
+// called, and returns its address.
+func startTestEdge(t *testing.T) (addr string, stop func()) {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback})
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	rcv := interest.NewReceiver(interest.ReceiverConfig{Policy: &edgePolicy{quota: -1}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = interest.ServeReceiver(ctx, conn, rcv, interest.ServeOptions{Tick: 20 * time.Millisecond})
+	}()
+	var once sync.Once
+	stop = func() { once.Do(func() { cancel(); <-done; _ = conn.Close() }) }
+	t.Cleanup(stop)
+	return conn.LocalAddr().String(), stop
+}
+
+// deadAddr returns a loopback address and port with nothing listening on it.
+func deadAddr(t *testing.T) string {
+	t.Helper()
+	c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback})
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	a := c.LocalAddr().String()
+	_ = c.Close()
+	return a
+}
+
+// A bridge names both of its edges, and the standby stays silent: that is
+// one line at Info, never a warning.
+func TestAnnouncerStandbyIsQuiet(t *testing.T) {
+	primary, _ := startTestEdge(t)
+	standby := deadAddr(t)
+	var logs syncBuffer
+	a, err := newAnnouncer(config{interestUpstream: primary + "," + standby, interestBind: "[::1]:0", interestLabel: "bridge-test-5"},
+		[]string{"tm_a"}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.watchEvery = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Serve(ctx) }()
+	waitFor(t, &logs, "topic served by the edge")
+	waitFor(t, &logs, "as a standby edge does until delivery moves to it")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if out := logs.String(); strings.Contains(out, "level=WARN") {
+		t.Fatalf("a silent standby must not warn:\n%s", out)
+	}
+}
+
+// Delivery moves: the edge that answered goes silent while the other
+// answers. One line at Info; the warning is for when no edge answers.
+func TestAnnouncerEdgeMovedIsQuiet(t *testing.T) {
+	first, stopFirst := startTestEdge(t)
+	second, _ := startTestEdge(t)
+	var logs syncBuffer
+	a, err := newAnnouncer(config{interestUpstream: first + "," + second, interestBind: "[::1]:0", interestLabel: "bridge-test-6"},
+		[]string{"tm_a"}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.watchEvery = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Serve(ctx) }()
+	waitFor(t, &logs, "topic served by the edge")
+	// Both edges must have answered before one goes away.
+	reachable := func() int {
+		n := 0
+		for _, u := range a.client.Upstreams() {
+			if u.Reachable {
+				n++
+			}
+		}
+		return n
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for reachable() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("both edges did not answer:\n%s", logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stopFirst()
+	a.client.Add(interest.TopicID(objfmt.TopicID("tm_b")))
+	waitFor(t, &logs, "an edge stopped answering while another answers")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if out := logs.String(); strings.Contains(out, "level=WARN") {
+		t.Fatalf("an edge going silent while another answers must not warn:\n%s", out)
 	}
 }
