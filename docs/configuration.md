@@ -35,6 +35,49 @@ A delivered record for a topic not in `-topics` is counted `unknown_topic`
 with the identifier in the log line. That counter is the only signal that a
 subscription and this configuration have drifted apart, so alert on it.
 
+## Topic interest
+
+Optional. With `-interest-upstream` the bridge tells its delivery edge which
+topics `-topics` needs, and logs the edge's answer for each topic by name.
+The protocol is a draft and its wire may still change.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-interest-upstream` | none | where to announce: the delivery edges the consumer's tunnel reaches, or a relay, as a comma list of `[host]:port`. Every one is told every topic. Empty turns the announcer off |
+| `-interest-bind` | `[::]:0` | the local address to announce from. The edge identifies the consumer by it, so on a host with several addresses name the consumer's own tunnel address. A named upstream resolves in this address's family, and one of the other family is refused at startup |
+| `-interest-label` | `overlay-bridge` | distinguishes this bridge from any other announcer on the same host. Two bridges on one host need different labels |
+| `-interest-lifetime` | `0` | the lifetime to ask for, in whole seconds. `0` asks for the edge's default |
+| `-interest-withdraw-on-exit` | `false` | withdraw on exit, so the edge stops delivering announced topics at once. Leave it off for a bridge that restarts: what it announced stays for its lifetime |
+
+What the edge answers, and what the bridge does with it:
+
+| Answer | Meaning | In the log |
+|---|---|---|
+| served | the topic is in the consumer's election, or the account's interest quota covers it | `topic served by the edge` |
+| outside the bound | not in the election, and the account has no interest quota | `TOPIC NOT DELIVERED`, with the fix |
+| over the cap | the interest quota is used up | `TOPIC NOT DELIVERED`; asked again at every refresh |
+| not served | the consumer's tunnel does not deliver the topic's group; a relay that knows no path it announces to delivers it says `unserved` | `TOPIC NOT DELIVERED` |
+
+The announcer is not on the data path. When it is in trouble the bridge
+keeps delivering, and says so:
+
+| Trouble | In the log |
+|---|---|
+| its socket cannot be opened, for example because `-interest-bind` is not yet an address of the host, or the socket fails | `TOPIC INTEREST STOPPED`, then tried again |
+| sends fail | `TOPIC INTEREST: cannot send to the edge`, at most once a minute with the number that failed |
+| an edge stops answering | `TOPIC INTEREST: the edge does not answer`, noticed at the next exchange and at the latest at the next refresh; `the edge answers again` when it does. Meanwhile each topic keeps the last answer it had |
+
+This is the same fact the startup reconciliation reports, from the edge
+itself and for as long as the bridge runs: a topic the election stops
+covering is named in the log when it happens, not at the next restart. The
+two checks are independent and either can be used alone.
+
+Metrics: `overlay_bridge_interest_topics{status}`,
+`overlay_bridge_interest_upstream{upstream,state}` and
+`overlay_bridge_interest_events_total{upstream,event}`. A non-zero
+`overlay_bridge_interest_topics` for any status but `ok` and `pending` is a
+topic whose objects are not arriving.
+
 ## Engine
 
 | Flag | Default | Notes |

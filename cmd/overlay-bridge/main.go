@@ -46,6 +46,12 @@ type config struct {
 	subID      string
 	subToken   string
 
+	interestUpstream string
+	interestBind     string
+	interestLabel    string
+	interestLifetime time.Duration
+	interestWithdraw bool
+
 	engine        string
 	shadowEngine  string
 	shadowWorkers int
@@ -108,6 +114,11 @@ func main() {
 	flag.StringVar(&c.subURL, "subscription-url", "", "subscription source base URL (GET {url}/v1/state, see docs/contracts.md); with -subscription-consumer, -topics is reconciled against that consumer's subscription at startup")
 	flag.StringVar(&c.subID, "subscription-consumer", "", "consumer id to reconcile -topics against")
 	flag.StringVar(&c.subToken, "subscription-token", "", "bearer token for the subscription source read; prefer OVERLAY_BRIDGE_SUBSCRIPTION_TOKEN")
+	flag.StringVar(&c.interestUpstream, "interest-upstream", "", "comma list of [host]:port to announce topic interest to: the delivery edges this consumer's tunnel reaches, or a relay. When set, the bridge tells the edge which topics -topics needs and logs the edge's answer for each; empty = off")
+	flag.StringVar(&c.interestBind, "interest-bind", "[::]:0", "local [host]:port to announce from; the edge identifies the consumer by this address, so on a host with several addresses name the consumer's own tunnel address")
+	flag.StringVar(&c.interestLabel, "interest-label", "overlay-bridge", "label that distinguishes this bridge from any other announcer on the same host")
+	flag.DurationVar(&c.interestLifetime, "interest-lifetime", 0, "lifetime to ask the edge for, in whole seconds; 0 asks for the edge's default")
+	flag.BoolVar(&c.interestWithdraw, "interest-withdraw-on-exit", false, "withdraw the interest on exit, so the edge stops delivering announced topics at once; leave off for a bridge that restarts")
 	flag.StringVar(&c.engine, "engine", "", "BRC-22 submit base, root-mounted, no /api/v1 prefix")
 	flag.StringVar(&c.shadowEngine, "shadow-engine", "", "a second BRC-22 submit base fed every object the primary is fed, asynchronously, and compared per topic; empty = off")
 	flag.IntVar(&c.shadowWorkers, "shadow-workers", 2, "concurrent shadow submits")
@@ -183,6 +194,10 @@ func run(c config, log *slog.Logger) error {
 
 	names := splitList(c.topics)
 	reconcileTopics(ctx, c, names, log)
+	ann, err := newAnnouncer(c, names, log)
+	if err != nil {
+		return err
+	}
 	g := guard.New(c.guardTTL, c.guardEntries)
 
 	// ---- headers: the chain tracker the engine verifies against.
@@ -384,6 +399,16 @@ func run(c config, log *slog.Logger) error {
 	}
 	tasks.go_("beef-lane", beefLane.Serve)
 	tasks.go_("header-lane", headerLane.Serve)
+	// Only once the lanes listen: the edge starts delivering an announced
+	// topic as soon as it accepts the interest.
+	if ann != nil {
+		tasks.go_("interest", func(ctx context.Context) error {
+			if !lanesBound(ctx, beefLane, headerLane) {
+				return nil
+			}
+			return ann.Serve(ctx)
+		})
+	}
 
 	// ---- header read API.
 	var api *headers.API
@@ -397,10 +422,11 @@ func run(c config, log *slog.Logger) error {
 		col := &collector{
 			feed: f, guard: g, store: store, tracker: tracker,
 			facade: fac, publish: publish, publishLanes: laneNames,
-			lanes:   []*lanes.Lane{beefLane, headerLane},
-			timings: tim,
-			verify:  vmode != feed.VerifyOff,
-			config:  configLabels(c),
+			lanes:    []*lanes.Lane{beefLane, headerLane},
+			timings:  tim,
+			verify:   vmode != feed.VerifyOff,
+			config:   configLabels(c),
+			interest: ann,
 		}
 		tasks.go_("metrics", func(ctx context.Context) error {
 			return serveMetrics(ctx, c.metricsAddr, col, log)
