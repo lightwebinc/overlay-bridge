@@ -52,21 +52,38 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
-func startEdge(t *testing.T, pol *edgePolicy) (*interest.Receiver, string) {
+// startEdge runs a real receiver on the IPv6 loopback. stop ends it early;
+// the test's cleanup ends it otherwise.
+func startEdge(t *testing.T, pol *edgePolicy) (rcv *interest.Receiver, addr string, stop func()) {
 	t.Helper()
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback})
 	if err != nil {
 		t.Skipf("no IPv6 loopback: %v", err)
 	}
-	rcv := interest.NewReceiver(interest.ReceiverConfig{Policy: pol})
+	rcv = interest.NewReceiver(interest.ReceiverConfig{Policy: pol})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		_ = interest.ServeReceiver(ctx, conn, rcv, interest.ServeOptions{Tick: 20 * time.Millisecond})
 	}()
-	t.Cleanup(func() { cancel(); <-done; _ = conn.Close() })
-	return rcv, conn.LocalAddr().String()
+	var once sync.Once
+	stop = func() { once.Do(func() { cancel(); <-done; _ = conn.Close() }) }
+	t.Cleanup(stop)
+	return rcv, conn.LocalAddr().String(), stop
+}
+
+// silentAddr returns the address of a socket that is bound and never
+// answers: an edge that stays silent. It stays bound until the test ends,
+// so no other socket can take its port.
+func silentAddr(t *testing.T) string {
+	t.Helper()
+	c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback})
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c.LocalAddr().String()
 }
 
 func gather(t *testing.T, a *announcer) map[string]float64 {
@@ -142,7 +159,7 @@ func TestAnnouncerReportsWhatIsNotDelivered(t *testing.T) {
 	pol := &edgePolicy{listed: map[interest.TopicID]bool{
 		interest.TopicID(objfmt.TopicID("tm_elected")): true,
 	}, quota: 1}
-	rcv, edge := startEdge(t, pol)
+	rcv, edge, _ := startEdge(t, pol)
 
 	var logs syncBuffer
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -199,7 +216,7 @@ func TestAnnouncerReportsWhatIsNotDelivered(t *testing.T) {
 	// No quota at all: the topic is outside the bound, and the log says how
 	// to fix it.
 	pol2 := &edgePolicy{listed: map[interest.TopicID]bool{}}
-	_, edge2 := startEdge(t, pol2)
+	_, edge2, _ := startEdge(t, pol2)
 	var logs2 syncBuffer
 	b, err := newAnnouncer(config{interestUpstream: edge2, interestBind: "[::1]:0", interestLabel: "bridge-test-2"},
 		[]string{"tm_unelected"}, slog.New(slog.NewTextHandler(&logs2, nil)))
@@ -279,19 +296,9 @@ func TestAnnouncerSurvivesItsSocket(t *testing.T) {
 // The edge goes away. Every topic keeps the last answer it had, so the
 // bridge says so in a line of its own.
 func TestAnnouncerSaysWhenTheEdgeStopsAnswering(t *testing.T) {
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback})
-	if err != nil {
-		t.Skipf("no IPv6 loopback: %v", err)
-	}
-	rcv := interest.NewReceiver(interest.ReceiverConfig{Policy: &edgePolicy{quota: -1}})
-	ectx, stopEdge := context.WithCancel(context.Background())
-	edgeDone := make(chan struct{})
-	go func() {
-		defer close(edgeDone)
-		_ = interest.ServeReceiver(ectx, conn, rcv, interest.ServeOptions{Tick: 20 * time.Millisecond})
-	}()
+	_, edge, stopEdge := startEdge(t, &edgePolicy{quota: -1})
 	var logs syncBuffer
-	a, err := newAnnouncer(config{interestUpstream: conn.LocalAddr().String(), interestBind: "[::1]:0", interestLabel: "bridge-test-3"},
+	a, err := newAnnouncer(config{interestUpstream: edge, interestBind: "[::1]:0", interestLabel: "bridge-test-3"},
 		[]string{"tm_a"}, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -303,8 +310,6 @@ func TestAnnouncerSaysWhenTheEdgeStopsAnswering(t *testing.T) {
 	waitFor(t, &logs, "topic served by the edge")
 
 	stopEdge()
-	<-edgeDone
-	_ = conn.Close()
 	// Something to say, so that the silence is noticed now and not at the
 	// next refresh.
 	a.client.Add(interest.TopicID(objfmt.TopicID("tm_b")))
@@ -315,44 +320,11 @@ func TestAnnouncerSaysWhenTheEdgeStopsAnswering(t *testing.T) {
 	}
 }
 
-// startTestEdge runs a real receiver on the IPv6 loopback until stop is
-// called, and returns its address.
-func startTestEdge(t *testing.T) (addr string, stop func()) {
-	t.Helper()
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback})
-	if err != nil {
-		t.Skipf("no IPv6 loopback: %v", err)
-	}
-	rcv := interest.NewReceiver(interest.ReceiverConfig{Policy: &edgePolicy{quota: -1}})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = interest.ServeReceiver(ctx, conn, rcv, interest.ServeOptions{Tick: 20 * time.Millisecond})
-	}()
-	var once sync.Once
-	stop = func() { once.Do(func() { cancel(); <-done; _ = conn.Close() }) }
-	t.Cleanup(stop)
-	return conn.LocalAddr().String(), stop
-}
-
-// deadAddr returns a loopback address and port with nothing listening on it.
-func deadAddr(t *testing.T) string {
-	t.Helper()
-	c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback})
-	if err != nil {
-		t.Skipf("no IPv6 loopback: %v", err)
-	}
-	a := c.LocalAddr().String()
-	_ = c.Close()
-	return a
-}
-
 // A bridge names both of its edges, and the standby stays silent: that is
 // one line at Info, never a warning.
 func TestAnnouncerStandbyIsQuiet(t *testing.T) {
-	primary, _ := startTestEdge(t)
-	standby := deadAddr(t)
+	_, primary, _ := startEdge(t, &edgePolicy{quota: -1})
+	standby := silentAddr(t)
 	var logs syncBuffer
 	a, err := newAnnouncer(config{interestUpstream: primary + "," + standby, interestBind: "[::1]:0", interestLabel: "bridge-test-5"},
 		[]string{"tm_a"}, slog.New(slog.NewTextHandler(&logs, nil)))
@@ -377,8 +349,8 @@ func TestAnnouncerStandbyIsQuiet(t *testing.T) {
 // Delivery moves: the edge that answered goes silent while the other
 // answers. One line at Info; the warning is for when no edge answers.
 func TestAnnouncerEdgeMovedIsQuiet(t *testing.T) {
-	first, stopFirst := startTestEdge(t)
-	second, _ := startTestEdge(t)
+	_, first, stopFirst := startEdge(t, &edgePolicy{quota: -1})
+	_, second, _ := startEdge(t, &edgePolicy{quota: -1})
 	var logs syncBuffer
 	a, err := newAnnouncer(config{interestUpstream: first + "," + second, interestBind: "[::1]:0", interestLabel: "bridge-test-6"},
 		[]string{"tm_a"}, slog.New(slog.NewTextHandler(&logs, nil)))
@@ -417,4 +389,69 @@ func TestAnnouncerEdgeMovedIsQuiet(t *testing.T) {
 	if out := logs.String(); strings.Contains(out, "level=WARN") {
 		t.Fatalf("an edge going silent while another answers must not warn:\n%s", out)
 	}
+}
+
+// The decisions behind the silence lines, one look at the edges at a time.
+func TestEdgeWatch(t *testing.T) {
+	a := netip.MustParseAddrPort("[2001:db8::a]:8729")
+	b := netip.MustParseAddrPort("[2001:db8::b]:8729")
+	up := func(x netip.AddrPort) interest.UpstreamInfo { return interest.UpstreamInfo{Addr: x, Reachable: true} }
+	silent := func(x netip.AddrPort) interest.UpstreamInfo {
+		return interest.UpstreamInfo{Addr: x, Stats: interest.UpstreamStats{Timeouts: 3}}
+	}
+	waiting := func(x netip.AddrPort) interest.UpstreamInfo { return interest.UpstreamInfo{Addr: x} }
+	type look struct {
+		what string
+		ups  []interest.UpstreamInfo
+		want []string // one string per line expected from this look
+	}
+	run := func(t *testing.T, looks []look) {
+		t.Helper()
+		var logs syncBuffer
+		w := newEdgeWatch(slog.New(slog.NewTextHandler(&logs, nil)))
+		seen := 0
+		for _, l := range looks {
+			w.step(l.ups)
+			all := logs.String()
+			out := all[seen:]
+			seen = len(all)
+			if n := strings.Count(out, "\n"); n != len(l.want) {
+				t.Fatalf("%s: %d lines, want %d:\n%s", l.what, n, len(l.want), out)
+			}
+			for _, s := range l.want {
+				if !strings.Contains(out, s) {
+					t.Fatalf("%s: no %q in:\n%s", l.what, s, out)
+				}
+			}
+		}
+	}
+	t.Run("standby and failover", func(t *testing.T) {
+		run(t, []look{
+			{"nothing heard yet", []interest.UpstreamInfo{waiting(a), waiting(b)}, nil},
+			{"the primary answers", []interest.UpstreamInfo{up(a), waiting(b)}, nil},
+			{"the standby is silent", []interest.UpstreamInfo{up(a), silent(b)}, []string{"level=INFO msg=\"topic interest: an edge does not answer while another does"}},
+			{"and is said once", []interest.UpstreamInfo{up(a), silent(b)}, nil},
+			{"delivery moves", []interest.UpstreamInfo{silent(a), up(b)}, []string{
+				"level=INFO msg=\"topic interest: an edge stopped answering while another answers\" upstream=[2001:db8::a]:8729",
+				"level=INFO msg=\"topic interest: the edge answers\" upstream=[2001:db8::b]:8729"}},
+			{"neither answers", []interest.UpstreamInfo{silent(a), silent(b)}, []string{"level=WARN msg=\"TOPIC INTEREST: no edge answers\""}},
+			{"the warning is said once", []interest.UpstreamInfo{silent(a), silent(b)}, nil},
+			{"one answers again", []interest.UpstreamInfo{up(a), silent(b)}, []string{"level=INFO msg=\"topic interest: the edge answers\" upstream=[2001:db8::a]:8729"}},
+		})
+	})
+	t.Run("the edge that answered goes silent before the other shows anything", func(t *testing.T) {
+		run(t, []look{
+			{"the primary answers", []interest.UpstreamInfo{up(a), waiting(b)}, nil},
+			{"it goes silent, the other has not shown anything", []interest.UpstreamInfo{silent(a), waiting(b)}, []string{"level=WARN msg=\"TOPIC INTEREST: no edge answers\""}},
+			{"the other answers", []interest.UpstreamInfo{silent(a), up(b)}, []string{"level=INFO msg=\"topic interest: the edge answers\" upstream=[2001:db8::b]:8729"}},
+		})
+	})
+	t.Run("one edge", func(t *testing.T) {
+		run(t, []look{
+			{"nothing heard yet", []interest.UpstreamInfo{waiting(a)}, nil},
+			{"it never answers", []interest.UpstreamInfo{silent(a)}, []string{"level=WARN msg=\"TOPIC INTEREST: no edge answers\""}},
+			{"said once", []interest.UpstreamInfo{silent(a)}, nil},
+			{"it answers", []interest.UpstreamInfo{up(a)}, []string{"level=INFO msg=\"topic interest: the edge answers\""}},
+		})
+	})
 }
