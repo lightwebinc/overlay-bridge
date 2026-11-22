@@ -57,7 +57,7 @@ var (
 	descFacade = prometheus.NewDesc("overlay_bridge_facade_total",
 		"Facade submissions, by result.", []string{"result"}, nil)
 	descQueue = prometheus.NewDesc("overlay_bridge_publish_total",
-		"Up-tunnel publications, by result. waited = found the queue full and waited for room (-publish-wait), then was enqueued or shed; sent = confirmed by the ingress, never just written locally; resent = written again after the connection it was on died; failed = not written, or lost after its resends. A shed record is NOT on the plane and is not billed.",
+		"Up-tunnel publications, by result. waited = found the queue full and waited for room (-publish-wait), then was enqueued or shed; sent = confirmed by the ingress, never just written locally; resent = written again after the connection it was on died; failed = not written, or lost after its resends. A shed record is NOT on the plane.",
 		[]string{"result"}, nil)
 	descUnconfirmed = prometheus.NewDesc("overlay_bridge_publish_unconfirmed",
 		"Records written to the up-tunnel and not yet confirmed by the ingress.", nil, nil)

@@ -302,7 +302,7 @@ func run(c config, log *slog.Logger) error {
 			if sp.source != "" {
 				// Assert the source exists locally rather than discovering at the
 				// first publish that own-traffic exclusion has been silently
-				// missing: a wrong source is delivered, billable egress plus a
+				// missing: a wrong source is delivered back, a delivery plus a
 				// full verify per object, not a harmless duplicate.
 				addr, err := resolveSource(sp.source)
 				if err != nil {
@@ -673,7 +673,7 @@ func resolveSource(s string) (*net.TCPAddr, error) {
 			return &net.TCPAddr{IP: ip}, nil
 		}
 	}
-	return nil, fmt.Errorf("-publish-source %s is not an address on this machine; own-traffic exclusion would not match and delivery would be billed back to us", ip)
+	return nil, fmt.Errorf("-publish-source %s is not an address on this machine; own-traffic exclusion would not match and our own objects would be delivered back to us", ip)
 }
 
 func ingressAddrs(list string, port int) []string {
