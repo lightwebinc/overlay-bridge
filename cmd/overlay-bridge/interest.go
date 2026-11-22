@@ -15,7 +15,28 @@ import (
 
 	"github.com/lightwebinc/shard-common/interest"
 	"github.com/lightwebinc/shard-common/objfmt"
+	"github.com/lightwebinc/teranode-bridge/lanes"
 )
+
+// lanesBound waits until every lane listens, or ctx is done.
+func lanesBound(ctx context.Context, ls ...*lanes.Lane) bool {
+	t := time.NewTicker(10 * time.Millisecond)
+	defer t.Stop()
+	for {
+		all := true
+		for _, l := range ls {
+			all = all && l.Bound()
+		}
+		if all {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+		}
+	}
+}
 
 // announcer tells the delivery edge which topics this bridge needs: topic
 // interest (shard-common/interest).
@@ -33,20 +54,46 @@ type announcer struct {
 	withdraw bool
 	log      *slog.Logger
 
-	mu     sync.Mutex
-	names  map[interest.TopicID]string
-	status map[interest.TopicID]interest.Status
+	// How often the edges' state is checked for logging.
+	watchEvery time.Duration
+
+	mu        sync.Mutex
+	names     map[interest.TopicID]string
+	status    map[interest.TopicID]interest.Status
+	sendErrs  int       // failed sends not yet logged
+	sendErrAt time.Time // when one was last logged
 }
+
+// maxLifetime is the longest lifetime the wire can ask for; the next value
+// up asks for the edge's default.
+const maxLifetime = time.Duration(interest.LifetimeDefault-1) * time.Second
 
 // newAnnouncer returns nil when -interest-upstream is not set.
 func newAnnouncer(c config, names []string, log *slog.Logger) (*announcer, error) {
 	if strings.TrimSpace(c.interestUpstream) == "" {
 		return nil, nil
 	}
+	bind, err := netip.ParseAddrPort(c.interestBind)
+	if err != nil {
+		return nil, fmt.Errorf("-interest-bind %q: %w", c.interestBind, err)
+	}
+	// Resolve each upstream in the family the bind address sends from. A
+	// name with both kinds of address would otherwise resolve to IPv4,
+	// which a socket bound to an IPv6 address cannot reach.
+	network, family := "udp", ""
+	switch ba := bind.Addr().Unmap(); {
+	case ba.Is4():
+		network, family = "udp4", "IPv4"
+	case !ba.IsUnspecified():
+		network, family = "udp6", "IPv6"
+	}
 	var ups []netip.AddrPort
 	for _, f := range splitList(c.interestUpstream) {
-		ua, err := net.ResolveUDPAddr("udp", f)
+		ua, err := net.ResolveUDPAddr(network, f)
 		if err != nil {
+			if family != "" {
+				return nil, fmt.Errorf("-interest-upstream %q: %w; -interest-bind sends %s only", f, err, family)
+			}
 			return nil, fmt.Errorf("-interest-upstream %q: %w", f, err)
 		}
 		ap := ua.AddrPort()
@@ -55,15 +102,14 @@ func newAnnouncer(c config, names []string, log *slog.Logger) (*announcer, error
 		}
 		ups = append(ups, ap)
 	}
-	bind, err := netip.ParseAddrPort(c.interestBind)
-	if err != nil {
-		return nil, fmt.Errorf("-interest-bind %q: %w", c.interestBind, err)
-	}
 	if c.interestLifetime < 0 || c.interestLifetime%time.Second != 0 {
 		return nil, fmt.Errorf("-interest-lifetime %s: whole seconds, or 0 for the edge's default", c.interestLifetime)
 	}
+	if c.interestLifetime > maxLifetime {
+		return nil, fmt.Errorf("-interest-lifetime %s: at most %s", c.interestLifetime, maxLifetime)
+	}
 	a := &announcer{
-		bind: bind, withdraw: c.interestWithdraw, log: log,
+		bind: bind, withdraw: c.interestWithdraw, log: log, watchEvery: time.Second,
 		names:  make(map[interest.TopicID]string, len(names)),
 		status: make(map[interest.TopicID]interest.Status, len(names)),
 	}
@@ -116,11 +162,40 @@ func (a *announcer) onStatus(id interest.TopicID, st interest.Status) {
 	}
 }
 
-// Serve announces until ctx is done.
+// Serve announces until ctx is done. The announcer is not on the data path:
+// a socket that cannot be opened, or that fails, is logged and opened again,
+// and never stops the bridge.
 func (a *announcer) Serve(ctx context.Context) error {
+	go a.watch(ctx)
+	wait := time.Second
+	for {
+		start := time.Now()
+		err := a.serveOnce(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if time.Since(start) > time.Minute {
+			wait = time.Second
+		}
+		a.log.Error("TOPIC INTEREST STOPPED: the announcer's socket failed",
+			"err", err, "retry_in", wait,
+			"consequence", "the edge keeps what was announced until its lifetime runs out; nothing new is announced meanwhile",
+			"fix", "-interest-bind must be an address of this host; it is tried again")
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(wait):
+		}
+		if wait *= 2; wait > 30*time.Second {
+			wait = 30 * time.Second
+		}
+	}
+}
+
+func (a *announcer) serveOnce(ctx context.Context) error {
 	conn, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(a.bind))
 	if err != nil {
-		return fmt.Errorf("interest: %w", err)
+		return err
 	}
 	defer func() { _ = conn.Close() }()
 	return interest.RunClient(ctx, conn, a.client, interest.RunOptions{
@@ -128,8 +203,56 @@ func (a *announcer) Serve(ctx context.Context) error {
 		// arriving meanwhile, and what it announced lapses by itself if it
 		// does not come back.
 		WithdrawOnExit: a.withdraw,
-		OnError:        func(err error) { a.log.Debug("interest socket", "err", err) },
+		OnError:        a.sendError,
 	})
+}
+
+// sendError logs a failed send: the first at once, then at most one line a
+// minute with the number that failed, so a bridge that cannot reach its edge
+// says so without flooding the log.
+func (a *announcer) sendError(err error) {
+	a.mu.Lock()
+	a.sendErrs++
+	now := time.Now()
+	if now.Sub(a.sendErrAt) < time.Minute {
+		a.mu.Unlock()
+		return
+	}
+	n := a.sendErrs
+	a.sendErrs, a.sendErrAt = 0, now
+	a.mu.Unlock()
+	a.log.Warn("TOPIC INTEREST: cannot send to the edge", "err", err, "failed", n,
+		"consequence", "the edge is not told what this bridge needs",
+		"fix", "check the route from -interest-bind to -interest-upstream")
+}
+
+// watch logs when an edge stops answering, and when it answers again. While
+// every edge is silent each topic keeps its last answer, so without this a
+// bridge whose edge has gone would say nothing. An idle bridge sends only
+// at each refresh, so a silent edge is noticed then.
+func (a *announcer) watch(ctx context.Context) {
+	t := time.NewTicker(a.watchEvery)
+	defer t.Stop()
+	down := map[netip.AddrPort]bool{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		for _, u := range a.client.Upstreams() {
+			switch {
+			case u.Reachable && down[u.Addr]:
+				down[u.Addr] = false
+				a.log.Info("topic interest: the edge answers again", "upstream", u.Addr.String())
+			case !u.Reachable && u.Stats.Timeouts >= 3 && !down[u.Addr]:
+				down[u.Addr] = true
+				a.log.Warn("TOPIC INTEREST: the edge does not answer", "upstream", u.Addr.String(),
+					"consequence", "what it holds for this bridge lapses when its lifetime runs out",
+					"fix", "check that the edge listens for interest and that the tunnel passes it")
+			}
+		}
+	}
 }
 
 var (

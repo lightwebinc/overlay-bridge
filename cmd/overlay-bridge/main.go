@@ -399,10 +399,15 @@ func run(c config, log *slog.Logger) error {
 	}
 	tasks.go_("beef-lane", beefLane.Serve)
 	tasks.go_("header-lane", headerLane.Serve)
-	// After the lane is listening: the edge starts delivering an announced
+	// Only once the lanes listen: the edge starts delivering an announced
 	// topic as soon as it accepts the interest.
 	if ann != nil {
-		tasks.go_("interest", ann.Serve)
+		tasks.go_("interest", func(ctx context.Context) error {
+			if !lanesBound(ctx, beefLane, headerLane) {
+				return nil
+			}
+			return ann.Serve(ctx)
+		})
 	}
 
 	// ---- header read API.

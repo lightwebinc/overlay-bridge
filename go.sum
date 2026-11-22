@@ -18,8 +18,8 @@ github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTf
 github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
-github.com/lightwebinc/shard-common v0.27.4-0.20261122034801-020d08808447 h1:06RRarwM0IPxyzQbGq5XEEiZ2kRhNa9BQdujJUTRKjo=
-github.com/lightwebinc/shard-common v0.27.4-0.20261122034801-020d08808447/go.mod h1:OVCKu7VRtlhDOTb5n/FkDf15xkovglBGLF0quWTjt9U=
+github.com/lightwebinc/shard-common v0.28.0 h1:XaS6nsqv18qEZcaCrnUnOC5chkun1jgmzT0Xd8Tz1CU=
+github.com/lightwebinc/shard-common v0.28.0/go.mod h1:OVCKu7VRtlhDOTb5n/FkDf15xkovglBGLF0quWTjt9U=
 github.com/lightwebinc/teranode-bridge v0.13.2 h1:B68SzT42tYrWXw9f5HLEnFI/mSyP/MLRmQ4y7xWAUjY=
 github.com/lightwebinc/teranode-bridge v0.13.2/go.mod h1:Hgba3Cw7XKNA7e+YTdlIPBgE/xORNyBilOtnPzFaPQ4=
 github.com/mrz1836/go-whatsonchain v1.3.0 h1:uOq5mHPTMUfiyMAFv+wqRgZXZ5L3CrObaIdShnX/yzU=

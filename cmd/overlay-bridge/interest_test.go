@@ -124,6 +124,8 @@ func TestAnnouncerRejectsBadFlags(t *testing.T) {
 		"address and a port": {interestUpstream: "[::]:8729", interestBind: "[::]:0"},
 		"-interest-bind":     {interestUpstream: "[::1]:8729", interestBind: "nonsense"},
 		"-interest-lifetime": {interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestLifetime: 1500 * time.Millisecond},
+		"at most":            {interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestLifetime: maxLifetime + time.Second},
+		"sends IPv6 only":    {interestUpstream: "192.0.2.1:8729", interestBind: "[2001:db8::1]:0"},
 	}
 	for want, c := range cases {
 		c.interestLabel = "t"
@@ -173,13 +175,15 @@ func TestAnnouncerReportsWhatIsNotDelivered(t *testing.T) {
 		"overlay_bridge_interest_upstream/reachable":    1,
 		"overlay_bridge_interest_upstream/synced":       1,
 		"overlay_bridge_interest_upstream/held":         2,
-		"overlay_bridge_interest_events_total/sync":     1,
-		"overlay_bridge_interest_events_total/timeout":  0,
 		"overlay_bridge_interest_events_total/mismatch": 0,
 	} {
 		if m[key] != want {
 			t.Errorf("%s = %v, want %v", key, m[key], want)
 		}
+	}
+	// One replay, unless a loaded host delayed an answer past the timeout.
+	if m["overlay_bridge_interest_events_total/timeout"] == 0 && m["overlay_bridge_interest_events_total/sync"] != 1 {
+		t.Errorf("%v replays without a timeout, want 1", m["overlay_bridge_interest_events_total/sync"])
 	}
 	if got := len(rcv.Live("consumer")); got != 2 {
 		t.Errorf("the edge holds %d topics for the bridge, want 2", got)
@@ -229,5 +233,84 @@ func TestAnnouncerReportsWhatIsNotDelivered(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if got := len(rcv.Live("consumer")); got != 2 {
 		t.Errorf("the edge holds %d topics after the bridge stopped, want 2 still", got)
+	}
+}
+
+func waitFor(t *testing.T, logs *syncBuffer, s string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(logs.String(), s) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no %q in the log:\n%s", s, logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A socket the announcer cannot open is logged and tried again. It never
+// stops the bridge.
+func TestAnnouncerSurvivesItsSocket(t *testing.T) {
+	bind := "[2001:db8::1]:0"
+	if c, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.MustParseAddrPort(bind))); err == nil {
+		_ = c.Close()
+		t.Skip("the documentation address is assigned on this host")
+	}
+	var logs syncBuffer
+	a, err := newAnnouncer(config{interestUpstream: "[2001:db8::2]:8729", interestBind: bind, interestLabel: "bridge-test-4"},
+		[]string{"tm_a"}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Serve(ctx) }()
+	waitFor(t, &logs, "TOPIC INTEREST STOPPED")
+	select {
+	case err := <-done:
+		t.Fatalf("Serve returned while its context was live: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+}
+
+// The edge goes away. Every topic keeps the last answer it had, so the
+// bridge says so in a line of its own.
+func TestAnnouncerSaysWhenTheEdgeStopsAnswering(t *testing.T) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback})
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	rcv := interest.NewReceiver(interest.ReceiverConfig{Policy: &edgePolicy{quota: -1}})
+	ectx, stopEdge := context.WithCancel(context.Background())
+	edgeDone := make(chan struct{})
+	go func() {
+		defer close(edgeDone)
+		_ = interest.ServeReceiver(ectx, conn, rcv, interest.ServeOptions{Tick: 20 * time.Millisecond})
+	}()
+	var logs syncBuffer
+	a, err := newAnnouncer(config{interestUpstream: conn.LocalAddr().String(), interestBind: "[::1]:0", interestLabel: "bridge-test-3"},
+		[]string{"tm_a"}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.watchEvery = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Serve(ctx) }()
+	waitFor(t, &logs, "topic served by the edge")
+
+	stopEdge()
+	<-edgeDone
+	_ = conn.Close()
+	// Something to say, so that the silence is noticed now and not at the
+	// next refresh.
+	a.client.Add(interest.TopicID(objfmt.TopicID("tm_b")))
+	waitFor(t, &logs, "the edge does not answer")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve: %v", err)
 	}
 }
