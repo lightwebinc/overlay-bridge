@@ -65,7 +65,8 @@ keeps delivering, and says so:
 |---|---|
 | its socket cannot be opened, for example because `-interest-bind` is not yet an address of the host, or the socket fails | `TOPIC INTEREST STOPPED`, then tried again |
 | sends fail | `TOPIC INTEREST: cannot send to the edge`, at most once a minute with the number that failed |
-| an edge stops answering | `TOPIC INTEREST: the edge does not answer`, noticed at the next exchange and at the latest at the next refresh; `the edge answers again` when it does. Meanwhile each topic keeps the last answer it had |
+| no edge answers | `TOPIC INTEREST: no edge answers`, noticed at the next exchange and at the latest at the next refresh; `topic interest: the edge answers` when one does again. Meanwhile each topic keeps the last answer it had |
+| one edge is silent while another answers | one line at Info, not a warning. A standby edge stays silent until delivery moves to it, and the edge that delivered goes silent once delivery has moved away, so this is expected whenever `-interest-upstream` names both edges |
 
 This is the same fact the startup reconciliation reports, from the edge
 itself and for as long as the bridge runs: a topic the election stops

@@ -226,34 +226,103 @@ func (a *announcer) sendError(err error) {
 		"fix", "check the route from -interest-bind to -interest-upstream")
 }
 
-// watch logs when an edge stops answering, and when it answers again. While
-// every edge is silent each topic keeps its last answer, so without this a
-// bridge whose edge has gone would say nothing. An idle bridge sends only
-// at each refresh, so a silent edge is noticed then.
+// watch logs what the edges' silence means.
+//
+// Every edge silent is a warning: nothing the bridge announces is applied,
+// what the edges hold for it lapses when its lifetime runs out, and each
+// topic keeps its last answer meanwhile, so without this line a bridge whose
+// edge has gone would say nothing.
+//
+// One edge silent while another answers is not. A standby edge holds no
+// record of a consumer it is not delivering to, so it stays silent until
+// delivery moves to it, and the edge that delivered goes silent once delivery
+// has moved away. A warning there would fire on every bridge that names both
+// of its edges, as it should, and teach its operator to ignore the one that
+// matters. So each such edge gets one line at Info.
+//
+// An idle bridge sends only at each refresh, so a silence is noticed then.
 func (a *announcer) watch(ctx context.Context) {
 	t := time.NewTicker(a.watchEvery)
 	defer t.Stop()
-	down := map[netip.AddrPort]bool{}
+	w := newEdgeWatch(a.log)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		for _, u := range a.client.Upstreams() {
-			switch {
-			case u.Reachable && down[u.Addr]:
-				down[u.Addr] = false
-				a.log.Info("topic interest: the edge answers again", "upstream", u.Addr.String())
-			case !u.Reachable && u.Stats.Timeouts >= 3 && !down[u.Addr]:
-				down[u.Addr] = true
-				a.log.Warn("TOPIC INTEREST: the edge does not answer", "upstream", u.Addr.String(),
-					"consequence", "what it holds for this bridge lapses when its lifetime runs out",
-					"fix", "check that the edge listens for interest and that the tunnel passes it")
+		w.step(a.client.Upstreams())
+	}
+}
+
+// edgeWatch turns successive looks at the edges into log lines, as watch
+// describes. It keeps no clock, so a test can drive it a step at a time.
+type edgeWatch struct {
+	log      *slog.Logger
+	answered map[netip.AddrPort]bool // has answered at least once
+	noted    map[netip.AddrPort]bool // its silence has been logged
+	warned   bool                    // the last look found no edge answering
+}
+
+func newEdgeWatch(log *slog.Logger) *edgeWatch {
+	return &edgeWatch{log: log, answered: map[netip.AddrPort]bool{}, noted: map[netip.AddrPort]bool{}}
+}
+
+func (w *edgeWatch) step(ups []interest.UpstreamInfo) {
+	reachable, silent := 0, 0
+	for _, u := range ups {
+		switch {
+		case u.Reachable:
+			reachable++
+		case isSilent(u):
+			silent++
+		}
+	}
+	// No edge answers once one has shown it is silent and none answers: then
+	// nothing this bridge announces is applied, whether or not every edge
+	// has reached the silent mark yet.
+	noneAnswers := reachable == 0 && silent > 0
+	for _, u := range ups {
+		addr := u.Addr.String()
+		switch {
+		case u.Reachable:
+			// Said for an edge whose silence was logged, and for the first edge
+			// to answer after the warning, so the warning never stands alone.
+			if w.noted[u.Addr] || w.warned {
+				w.log.Info("topic interest: the edge answers", "upstream", addr)
+			}
+			w.noted[u.Addr], w.answered[u.Addr] = false, true
+		case isSilent(u) && !w.noted[u.Addr] && !noneAnswers:
+			w.noted[u.Addr] = true
+			if w.answered[u.Addr] {
+				w.log.Info("topic interest: an edge stopped answering while another answers",
+					"upstream", addr, "consequence", "the edge that answers holds this bridge's interest")
+			} else {
+				w.log.Info("topic interest: an edge does not answer while another does, as a standby edge does until delivery moves to it",
+					"upstream", addr)
 			}
 		}
 	}
+	if noneAnswers && !w.warned {
+		names := make([]string, 0, len(ups))
+		for _, u := range ups {
+			names = append(names, u.Addr.String())
+			if isSilent(u) {
+				w.noted[u.Addr] = true
+			}
+		}
+		w.log.Warn("TOPIC INTEREST: no edge answers", "upstreams", strings.Join(names, ","),
+			"consequence", "nothing this bridge announces is applied, and what the edges hold for it lapses when its lifetime runs out",
+			"fix", "check that the edges listen for interest and that the tunnel passes it")
+	}
+	w.warned = noneAnswers
 }
+
+// isSilent reports an upstream that has stopped answering, or never has.
+// The client marks an edge that has answered unreachable after three
+// timeouts in a row. Before its first answer an edge is sent one probe at a
+// time, so three timeouts are three unanswered probes in a row there too.
+func isSilent(u interest.UpstreamInfo) bool { return !u.Reachable && u.Stats.Timeouts >= 3 }
 
 var (
 	descInterestTopics = prometheus.NewDesc("overlay_bridge_interest_topics",
