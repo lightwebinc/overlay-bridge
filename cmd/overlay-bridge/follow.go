@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -154,7 +155,11 @@ func (fo *follower) prime(ctx context.Context, wait time.Duration) []string {
 		pending := 0
 		for _, o := range fo.origins {
 			if !o.answered && !o.static {
-				fo.read(ctx, o, false)
+				// Each read is bounded by the time left, so a hung engine
+				// cannot hold the start past -topics-wait.
+				rctx, cancel := context.WithDeadline(ctx, deadline.Add(time.Second))
+				fo.read(rctx, o, false)
+				cancel()
 				if !o.answered && !o.static {
 					pending++
 				}
@@ -223,13 +228,18 @@ func (fo *follower) run(ctx context.Context, apply func(names []string)) error {
 // bridge is waiting for it at start.
 func (fo *follower) read(ctx context.Context, o *origin, loud bool) {
 	names, etag, status, err := fo.list(ctx, o)
+	if err != nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled) {
+		return // the bridge is stopping: not a failure of the engine
+	}
 	fo.mu.Lock()
 	defer fo.mu.Unlock()
 	switch {
 	case err == nil && status == http.StatusNotModified:
 	case err == nil && status == http.StatusOK:
 		o.known, o.etag, o.answered = names, etag, true
-	case err == nil && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented):
+	case err == nil && !o.answered && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented):
+		// Only an engine that never listed: one that listed and now answers
+		// 404 (a proxy, a deploy in progress) is failing, not a provider.
 		// It answers, but not this question: not an engine that lists.
 		o.static = true
 		if len(o.known) == 0 {
@@ -295,7 +305,16 @@ func (fo *follower) list(ctx context.Context, o *origin) (names []string, etag s
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, "", 0, fmt.Errorf("the list is not a JSON object of topic names: %w", err)
 	}
-	for n := range m {
+	// An engine that carries nothing is far likelier a broken answer (a
+	// proxy's error page, a JSON null) than a real list: it would withdraw
+	// every topic, so it is a failure and the last list stands.
+	if len(m) == 0 {
+		return nil, "", 0, errors.New("the list names no topic")
+	}
+	for n, v := range m {
+		if t := bytes.TrimSpace(v); len(t) == 0 || t[0] != '{' {
+			return nil, "", 0, fmt.Errorf("the list's entry %q is not a topic manager's metadata", n)
+		}
 		if n = strings.TrimSpace(n); n != "" {
 			names = append(names, n)
 		}
@@ -373,3 +392,6 @@ func nameSet(names []string) map[string]struct{} {
 	}
 	return s
 }
+
+// unionNames is every name in a or b.
+func unionNames(a, b []string) []string { return uniqueSorted(append(slices.Clone(a), b...)) }

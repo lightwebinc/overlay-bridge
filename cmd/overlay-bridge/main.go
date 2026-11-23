@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -429,16 +430,29 @@ func run(c config, log *slog.Logger) error {
 	// topic and the facade takes its submissions BEFORE the edge is asked
 	// for it, and the edge is told of a topic gone after neither does.
 	if follow != nil {
-		apply := func(names []string) {
-			f.SetTopics(feed.NewTopicMap(names))
+		// A topic dropped: the edge is told at once and the facade refuses it
+		// at once, but the feed keeps its name until the next change or one
+		// -topics-every, so the records already on their way are submitted,
+		// not counted unknown_topic (an alert).
+		prevNames := names
+		var gen atomic.Uint64
+		apply := func(next []string) {
+			g := gen.Add(1)
+			f.SetTopics(feed.NewTopicMap(unionNames(prevNames, next)))
 			if fac != nil {
-				fac.SetTopics(nameSet(names))
+				fac.SetTopics(nameSet(next))
 			}
 			if ann != nil {
-				ann.update(names)
+				ann.update(next)
 			}
+			prevNames = next
+			time.AfterFunc(c.topicsEvery, func() {
+				if gen.Load() == g {
+					f.SetTopics(feed.NewTopicMap(next))
+				}
+			})
 			if c.subURL != "" && c.subID != "" {
-				reconcileTopics(ctx, c, names, log)
+				go reconcileTopics(ctx, c, next, log) // up to 15 s: never holds the next ask
 			}
 		}
 		tasks.go_("topics-follow", func(ctx context.Context) error { return follow.run(ctx, apply) })

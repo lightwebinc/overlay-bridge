@@ -60,7 +60,7 @@ are not touched.
 | an engine has not answered yet | at start, waits up to `-topics-wait`, then opens its lanes with the `-topics` names routed to that engine and logs `TOPICS NOT YET FROM THE ENGINE`; the engine's list replaces them when it answers |
 | an engine stops answering | keeps the list it last gave, logs `TOPICS NOT FOLLOWED` once and exports `overlay_bridge_topics_engine_up` 0. A topic is dropped only when an engine that answers no longer lists it, never because an engine is down |
 | a primary answers 404, 405 or 501 | it does not list its topics (a storage provider): its topics are the `-topics` names routed to it and every topic a listing engine lists that is routed to it, so a host whose engine carries a storage topic routed to its provider names it once. With neither, `TOPICS NOT FOLLOWED` says nothing is delivered for it |
-| an answer that is not a JSON object of topic names | a failure, as above; never an empty list |
+| an answer that is not a JSON object of topic names to metadata objects, or names none | a failure, as above; never an empty list. A 404 from an engine that has listed before is a failure too, never a provider |
 
 The bridge keeps nothing on disk for this: what each engine listed is asked
 again every `-topics-every`, with the ETag the engine gave, so an unchanged

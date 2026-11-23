@@ -387,3 +387,93 @@ func TestAnnouncerFollowsTopicChanges(t *testing.T) {
 	a.update([]string{"tm_b"})
 	held("tm_b")
 }
+
+// An engine that listed and then answers 404 (a proxy, a deploy) is failing,
+// not a provider: its list stands and it is asked again.
+func TestFollowerA404AfterAListIsAFailure(t *testing.T) {
+	eng, url := startEngine(t, "tm_a", "tm_b")
+	var logs syncBuffer
+	fo, err := newFollower(followConfig(url), slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fo.prime(context.Background(), time.Second)
+	got := runFollower(t, fo)
+	eng.failWith(http.StatusNotFound)
+	waitFor(t, &logs, "TOPICS NOT FOLLOWED: an engine does not answer")
+	eng.set("tm_a")
+	eng.failWith(0)
+	if s := nextSet(t, got); !slices.Equal(s, []string{"tm_a"}) {
+		t.Fatalf("applied %v, want [tm_a]: the engine was not asked again after its 404", s)
+	}
+}
+
+// Answers that are not a list of topic managers never withdraw anything.
+func TestFollowerRefusesBrokenLists(t *testing.T) {
+	for name, body := range map[string]string{"null": `null`, "empty": `{}`, "an error object": `{"error":"boom"}`} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+			t.Cleanup(srv.Close)
+			c := followConfig(srv.URL)
+			c.topics = "tm_seed"
+			fo, err := newFollower(c, slog.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fo.prime(context.Background(), 0); !slices.Equal(got, []string{"tm_seed"}) {
+				t.Fatalf("carried %v, want -topics kept", got)
+			}
+		})
+	}
+}
+
+// A clean stop in the middle of an ask is not an engine failing.
+func TestFollowerStopIsQuiet(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-block:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(block); srv.Close() })
+	var logs syncBuffer
+	c := followConfig(srv.URL)
+	c.topics = "tm_a"
+	fo, err := newFollower(c, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fo.origins[0].answered = true // as if it had listed
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = fo.run(ctx, func([]string) {}) }()
+	time.Sleep(100 * time.Millisecond) // the ask is in flight
+	cancel()
+	<-done
+	if strings.Contains(logs.String(), "TOPICS NOT FOLLOWED") {
+		t.Fatalf("a stop was logged as a failure:\n%s", logs.String())
+	}
+}
+
+// The start wait holds however many engines hang.
+func TestFollowerPrimeKeepsItsWait(t *testing.T) {
+	hang := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
+	var urls []string
+	for range 3 {
+		srv := httptest.NewServer(hang)
+		t.Cleanup(srv.Close)
+		urls = append(urls, srv.URL)
+	}
+	c := followConfig(urls[0])
+	c.engineRoutes = routeFlags{"tm_b*=" + urls[1], "tm_c*=" + urls[2]}
+	fo, err := newFollower(c, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Now()
+	fo.prime(context.Background(), 500*time.Millisecond)
+	if d := time.Since(t0); d > 5*time.Second {
+		t.Fatalf("prime took %v with a 500ms wait", d)
+	}
+}
