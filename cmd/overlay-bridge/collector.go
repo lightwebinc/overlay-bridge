@@ -42,6 +42,9 @@ type collector struct {
 	config []string
 	// interest is the topic interest announcer; nil when it is off.
 	interest *announcer
+	// follow keeps the topics equal to the engines' (-topics-from engine);
+	// nil when -topics is the list.
+	follow *follower
 }
 
 var (
@@ -148,6 +151,9 @@ func (c *collector) Describe(ch chan<- *prometheus.Desc) {
 	if c.interest != nil {
 		c.interest.describe(ch)
 	}
+	if c.follow != nil {
+		c.follow.describe(ch)
+	}
 }
 
 func counter(ch chan<- prometheus.Metric, d *prometheus.Desc, v uint64, labels ...string) {
@@ -228,6 +234,9 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 	if c.interest != nil {
 		c.interest.collect(ch)
 	}
+	if c.follow != nil {
+		c.follow.collect(ch)
+	}
 
 	if c.feed != nil {
 		f := c.feed
@@ -301,7 +310,7 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		for k := range s.Steak {
 			seen[k] = true
 		}
-		for _, name := range f.Topics {
+		for _, name := range f.TopicMap() {
 			for _, oc := range []string{feed.OutcomeAdmitted, feed.OutcomeEmpty, feed.OutcomeError} {
 				if k := (feed.SteakKey{Topic: name, Outcome: oc}); !seen[k] {
 					counter(ch, descSteak, 0, name, oc)

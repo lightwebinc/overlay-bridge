@@ -56,8 +56,10 @@ type announcer struct {
 	log      *slog.Logger
 
 	// deliverTo is the lane named with every topic (-interest-deliver-to),
-	// or not valid when none is.
+	// or not valid when none is; ext is the record extension that names it,
+	// nil when none is.
 	deliverTo netip.AddrPort
+	ext       []byte
 
 	// How often the edges' state is checked for logging.
 	watchEvery time.Duration
@@ -132,9 +134,9 @@ func newAnnouncer(c config, names []string, log *slog.Logger) (*announcer, error
 	}
 	a := &announcer{
 		bind: bind, withdraw: c.interestWithdraw, log: log, watchEvery: time.Second,
-		deliverTo: deliverTo,
-		names:     make(map[interest.TopicID]string, len(names)),
-		status:    make(map[interest.TopicID]interest.Status, len(names)),
+		deliverTo: deliverTo, ext: ext,
+		names:  make(map[interest.TopicID]string, len(names)),
+		status: make(map[interest.TopicID]interest.Status, len(names)),
 	}
 	a.client = interest.NewClient(interest.ClientConfig{
 		SenderID:  interest.NewSenderID(c.interestLabel),
@@ -186,11 +188,51 @@ func deliveryExt(addr string) (netip.AddrPort, []byte, error) {
 	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()), interest.AppendTLV(nil, interest.ExtDelivery, v), nil
 }
 
+// update makes the announced topics names, for a bridge whose topics change
+// while it runs: a topic new to the set is announced at once and a topic that
+// left it is withdrawn, so the edge stops delivering it. The others are left
+// as they are.
+func (a *announcer) update(names []string) {
+	want := make(map[interest.TopicID]string, len(names))
+	for _, n := range names {
+		want[interest.TopicID(objfmt.TopicID(n))] = n
+	}
+	var add, drop []interest.TopicID
+	a.mu.Lock()
+	for id, n := range want {
+		if _, ok := a.names[id]; !ok {
+			add = append(add, id)
+			a.names[id] = n
+			a.status[id] = interest.StatusPending
+		}
+	}
+	for id := range a.names {
+		if _, ok := want[id]; !ok {
+			drop = append(drop, id)
+			delete(a.names, id)
+			delete(a.status, id)
+		}
+	}
+	a.mu.Unlock()
+	// Outside the lock: the client may report a status from inside a call.
+	for _, id := range drop {
+		a.client.Remove(id)
+	}
+	for _, id := range add {
+		a.client.Set(id, a.ext)
+	}
+}
+
 // onStatus reports the edge's answer for a topic, loudly when it means
 // objects are not arriving.
 func (a *announcer) onStatus(id interest.TopicID, st interest.Status) {
 	a.mu.Lock()
-	name := a.names[id]
+	name, ok := a.names[id]
+	if !ok {
+		// Withdrawn since (update): an answer about it no longer counts.
+		a.mu.Unlock()
+		return
+	}
 	prev := a.status[id]
 	a.status[id] = st
 	a.mu.Unlock()

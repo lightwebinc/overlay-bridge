@@ -57,6 +57,15 @@ func reconcileTopics(ctx context.Context, c config, names []string, log *slog.Lo
 	log.Warn("TOPIC MISMATCH: this bridge is discarding objects the plane is delivering",
 		"consumer", c.subID,
 		"detail", d.Describe(),
-		"fix", "add the topic to -topics and restart this unit",
+		"fix", reconcileFix(c),
 		"watch", `overlay_bridge_feed_total{outcome="unknown_topic"}`)
+}
+
+// reconcileFix says where a missing topic is added: the engine's configuration
+// when the bridge follows it, else -topics.
+func reconcileFix(c config) string {
+	if c.topicsFrom == "engine" {
+		return "add the topic to the engine's topics; this bridge follows the engine within -topics-every"
+	}
+	return "add the topic to -topics and restart this unit"
 }
