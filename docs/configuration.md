@@ -64,9 +64,9 @@ What the edge answers, and what the bridge does with it:
 ### Behind a distributing relay
 
 A host deep inside a consumer's network has no lane of its own at the edge.
-The consumer's lane can end at a relay that distributes
-(`interest-relay -distribute-listen`), which writes each topic's records on
-to the hosts that asked for it. The bridge asks for its records with
+The consumer's lane can end at a relay that distributes: it writes each
+topic's records on to the hosts that asked for it, at the address each
+names. The bridge asks for its records with
 `-interest-deliver-to` set to its own lane, and announces to that relay:
 
 ```sh
