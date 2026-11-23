@@ -143,6 +143,14 @@ func TestAnnouncerRejectsBadFlags(t *testing.T) {
 		"-interest-lifetime": {interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestLifetime: 1500 * time.Millisecond},
 		"at most":            {interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestLifetime: maxLifetime + time.Second},
 		"sends IPv6 only":    {interestUpstream: "192.0.2.1:8729", interestBind: "[2001:db8::1]:0"},
+		// A delivery address is named to the hop the bridge announces to, so
+		// without one it would be dropped in silence.
+		"needs -interest-upstream":               {interestBind: "[::]:0", interestDeliver: "[2001:db8::1]:9171"},
+		`-interest-deliver-to "nonsense"`:        {interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestDeliver: "nonsense"},
+		`-interest-deliver-to "[2001:db8::1]:0"`: {interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestDeliver: "[2001:db8::1]:0"},
+		"unicast delivery to ::":                 {interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestDeliver: "[::]:9171"},
+		"unicast delivery to ff05::1":            {interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestDeliver: "[ff05::1]:9171"},
+		"with a zone":                            {interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestDeliver: "[fe80::1%eth0]:9171"},
 	}
 	for want, c := range cases {
 		c.interestLabel = "t"
@@ -454,4 +462,160 @@ func TestEdgeWatch(t *testing.T) {
 			{"it answers", []interest.UpstreamInfo{up(a)}, []string{"level=INFO msg=\"topic interest: the edge answers\""}},
 		})
 	})
+}
+
+// tapEdge runs a real receiver behind a socket that decodes every ANNOUNCE
+// on its way through, so a test sees what the bridge puts on the wire. The
+// receiver sees the tap as the sender, and its answers go back the same way.
+func tapEdge(t *testing.T, pol *edgePolicy) (addr string, records func() []interest.Record) {
+	t.Helper()
+	_, edge, _ := startEdge(t, pol)
+	edgeAddr := netip.MustParseAddrPort(edge)
+	front, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback})
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	t.Cleanup(func() { _ = front.Close() })
+	var (
+		mu     sync.Mutex
+		seen   []interest.Record
+		sender netip.AddrPort
+	)
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := front.ReadFromUDPAddrPort(buf)
+			if err != nil {
+				return
+			}
+			b := bytes.Clone(buf[:n])
+			if from == edgeAddr {
+				mu.Lock()
+				to := sender
+				mu.Unlock()
+				_, _ = front.WriteToUDPAddrPort(b, to)
+				continue
+			}
+			mu.Lock()
+			sender = from
+			if m, err := interest.DecodeAnnounce(b); err == nil {
+				for _, r := range m.Records {
+					r.Ext = bytes.Clone(r.Ext)
+					seen = append(seen, r)
+				}
+			}
+			mu.Unlock()
+			_, _ = front.WriteToUDPAddrPort(b, edgeAddr)
+		}
+	}()
+	return front.LocalAddr().String(), func() []interest.Record {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]interest.Record(nil), seen...)
+	}
+}
+
+// With -interest-deliver-to every topic names the bridge's lane, so a
+// distributing relay above sends the topic's records there. An edge holds
+// the topics and ignores the address, and the bridge says that once.
+func TestAnnouncerNamesItsLane(t *testing.T) {
+	edge, records := tapEdge(t, &edgePolicy{quota: -1})
+	var logs syncBuffer
+	lane := netip.MustParseAddrPort("[2001:db8:c:1::10]:9171")
+	a, err := newAnnouncer(config{
+		interestUpstream: edge, interestBind: "[::1]:0", interestLabel: "bridge-test-lane",
+		interestDeliver: lane.String(), beefLane: "[::]:9171",
+	}, []string{"tm_one", "tm_two"}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Serve(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for gather(t, a)["overlay_bridge_interest_topics/ok"] != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("answers did not settle: %v\n%s", gather(t, a), logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("serve: %v", err)
+	}
+
+	// On the wire: every record that asks for a topic names the lane.
+	asked := map[interest.TopicID]bool{}
+	for _, r := range records() {
+		if r.Lifetime == interest.LifetimeWithdraw {
+			continue
+		}
+		asked[r.Topic] = true
+		tlvs, err := interest.ParseTLVs(r.Ext)
+		if err != nil || len(tlvs) != 1 || tlvs[0].Type != interest.ExtDelivery {
+			t.Fatalf("record for %x carries %x, want one delivery address", r.Topic[:4], r.Ext)
+		}
+		d, err := interest.ParseDelivery(tlvs[0].Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Kind != interest.DeliverUnicast || d.Encoding != interest.EncodeRecords || d.Addr != lane.Addr() || d.Port != lane.Port() {
+			t.Errorf("record names %+v, want a unicast stream of records to %s", d, lane)
+		}
+	}
+	if len(asked) != 2 {
+		t.Errorf("%d topics asked for on the wire, want 2", len(asked))
+	}
+
+	m := gather(t, a)
+	if m["overlay_bridge_interest_topics/bad_address"] != 0 {
+		t.Errorf("bad_address = %v, want 0 and exported", m["overlay_bridge_interest_topics/bad_address"])
+	}
+	if _, ok := m["overlay_bridge_interest_topics/bad_address"]; !ok {
+		t.Error("bad_address is not exported for a bridge that names an address")
+	}
+	out := logs.String()
+	if n := strings.Count(out, "does not honor -interest-deliver-to"); n != 1 {
+		t.Errorf("the address not honored was said %d times, want once:\n%s", n, out)
+	}
+	if !strings.Contains(out, "deliver_to="+lane.String()) {
+		t.Errorf("the startup line does not name the lane:\n%s", out)
+	}
+	if strings.Contains(out, "does not listen on") {
+		t.Errorf("the lane's own port was reported as another:\n%s", out)
+	}
+}
+
+// A port the lane does not listen on is said at startup, and a refused
+// address is named by topic with the fix.
+func TestAnnouncerDeliverToWarnings(t *testing.T) {
+	var logs syncBuffer
+	a, err := newAnnouncer(config{
+		interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestLabel: "t",
+		interestDeliver: "[2001:db8::1]:9181", beefLane: "[::]:9171",
+	}, []string{"tm_refused"}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "names a port -beef-lane does not listen on") {
+		t.Errorf("a port mismatch was not reported:\n%s", logs.String())
+	}
+	a.onStatus(interest.TopicID(objfmt.TopicID("tm_refused")), interest.StatusBadAddress)
+	out := logs.String()
+	if !strings.Contains(out, "refused the address -interest-deliver-to names") || !strings.Contains(out, "tm_refused") {
+		t.Errorf("a refused address was not explained:\n%s", out)
+	}
+	if got := gather(t, a)["overlay_bridge_interest_topics/bad_address"]; got != 1 {
+		t.Errorf("bad_address = %v, want 1", got)
+	}
+
+	// No address named: no bad_address series, as before.
+	b, err := newAnnouncer(config{interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestLabel: "t"},
+		[]string{"tm_a"}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := gather(t, b)["overlay_bridge_interest_topics/bad_address"]; ok {
+		t.Error("bad_address is exported for a bridge that names no address")
+	}
 }

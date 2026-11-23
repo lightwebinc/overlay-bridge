@@ -54,14 +54,19 @@ type announcer struct {
 	withdraw bool
 	log      *slog.Logger
 
+	// deliverTo is the lane named with every topic (-interest-deliver-to),
+	// or not valid when none is.
+	deliverTo netip.AddrPort
+
 	// How often the edges' state is checked for logging.
 	watchEvery time.Duration
 
-	mu        sync.Mutex
-	names     map[interest.TopicID]string
-	status    map[interest.TopicID]interest.Status
-	sendErrs  int       // failed sends not yet logged
-	sendErrAt time.Time // when one was last logged
+	mu         sync.Mutex
+	names      map[interest.TopicID]string
+	status     map[interest.TopicID]interest.Status
+	sendErrs   int       // failed sends not yet logged
+	sendErrAt  time.Time // when one was last logged
+	notHonored bool      // the hop above not honoring deliverTo has been logged
 }
 
 // maxLifetime is the longest lifetime the wire can ask for; the next value
@@ -71,7 +76,14 @@ const maxLifetime = time.Duration(interest.LifetimeDefault-1) * time.Second
 // newAnnouncer returns nil when -interest-upstream is not set.
 func newAnnouncer(c config, names []string, log *slog.Logger) (*announcer, error) {
 	if strings.TrimSpace(c.interestUpstream) == "" {
+		if strings.TrimSpace(c.interestDeliver) != "" {
+			return nil, fmt.Errorf("-interest-deliver-to needs -interest-upstream: the address is named to the hop the bridge announces to")
+		}
 		return nil, nil
+	}
+	deliverTo, ext, err := deliveryExt(c.interestDeliver)
+	if err != nil {
+		return nil, err
 	}
 	bind, err := netip.ParseAddrPort(c.interestBind)
 	if err != nil {
@@ -108,10 +120,19 @@ func newAnnouncer(c config, names []string, log *slog.Logger) (*announcer, error
 	if c.interestLifetime > maxLifetime {
 		return nil, fmt.Errorf("-interest-lifetime %s: at most %s", c.interestLifetime, maxLifetime)
 	}
+	// A lane on another port than the one named receives nothing that is
+	// sent to the name, unless something forwards it. That may be meant (a
+	// port mapped in front of the bridge), so it is said, not refused.
+	if lane, err := netip.ParseAddrPort(c.beefLane); err == nil && deliverTo.IsValid() && lane.Port() != deliverTo.Port() {
+		log.Warn("topic interest: -interest-deliver-to names a port -beef-lane does not listen on",
+			"deliver_to", deliverTo.String(), "beef_lane", c.beefLane,
+			"consequence", "records sent to the address named arrive here only if something forwards that port to the lane")
+	}
 	a := &announcer{
 		bind: bind, withdraw: c.interestWithdraw, log: log, watchEvery: time.Second,
-		names:  make(map[interest.TopicID]string, len(names)),
-		status: make(map[interest.TopicID]interest.Status, len(names)),
+		deliverTo: deliverTo,
+		names:     make(map[interest.TopicID]string, len(names)),
+		status:    make(map[interest.TopicID]interest.Status, len(names)),
 	}
 	a.client = interest.NewClient(interest.ClientConfig{
 		SenderID:  interest.NewSenderID(c.interestLabel),
@@ -123,10 +144,44 @@ func newAnnouncer(c config, names []string, log *slog.Logger) (*announcer, error
 		id := interest.TopicID(objfmt.TopicID(n))
 		a.names[id] = n
 		a.status[id] = interest.StatusPending
-		a.client.Add(id)
+		a.client.Set(id, ext)
 	}
-	log.Info("topic interest is ON", "upstreams", ups, "announce_from", bind.String(), "topics", len(names))
+	attrs := []any{"upstreams", ups, "announce_from", bind.String(), "topics", len(names)}
+	if deliverTo.IsValid() {
+		attrs = append(attrs, "deliver_to", deliverTo.String())
+	}
+	log.Info("topic interest is ON", attrs...)
 	return a, nil
+}
+
+// deliveryExt returns the record extension that names addr as where a
+// topic's delivery records should arrive, a unicast stream of records, or
+// nothing when addr is empty.
+//
+// A host behind a distributing relay has no lane of its own at the edge: the
+// consumer's lane ends at the relay, which sends each topic's records on to
+// the hosts that asked for it, at the address each names. Without a name the
+// relay holds the topic for the bridge and sends it nothing.
+func deliveryExt(addr string) (netip.AddrPort, []byte, error) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return netip.AddrPort{}, nil, nil
+	}
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil || ap.Port() == 0 {
+		return netip.AddrPort{}, nil, fmt.Errorf("-interest-deliver-to %q: need an address and a port", addr)
+	}
+	if ap.Addr().Zone() != "" {
+		// The wire carries no zone, so the hop above could not tell which
+		// link the address is on.
+		return netip.AddrPort{}, nil, fmt.Errorf("-interest-deliver-to %q: an address with a zone cannot be named; name one the hop above routes to", addr)
+	}
+	d := interest.Delivery{Kind: interest.DeliverUnicast, Encoding: interest.EncodeRecords, Addr: ap.Addr(), Port: ap.Port()}
+	v, err := d.AppendValue(nil)
+	if err != nil {
+		return netip.AddrPort{}, nil, fmt.Errorf("-interest-deliver-to %q: %w", addr, err)
+	}
+	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()), interest.AppendTLV(nil, interest.ExtDelivery, v), nil
 }
 
 // onStatus reports the edge's answer for a topic, loudly when it means
@@ -142,7 +197,15 @@ func (a *announcer) onStatus(id interest.TopicID, st interest.Status) {
 		if !prev.Served() {
 			a.log.Info("topic served by the edge", "topic", name)
 		}
+		if st == interest.StatusAddressNotHonored && a.deliverTo.IsValid() {
+			a.logNotHonored(name)
+		}
 	case st == interest.StatusPending:
+	case st == interest.StatusBadAddress:
+		a.log.Warn("TOPIC NOT DELIVERED: the hop above refused the address -interest-deliver-to names",
+			"topic", name, "deliver_to", a.deliverTo.String(),
+			"consequence", "the topic is not held there, so nothing is delivered for it",
+			"fix", "name the address this bridge announces from, or one inside the prefix the relay allows it to announce from")
 	case st == interest.StatusOutsideBound:
 		a.log.Warn("TOPIC NOT DELIVERED: it is not in the consumer's election and the account has no interest quota",
 			"topic", name,
@@ -159,6 +222,24 @@ func (a *announcer) onStatus(id interest.TopicID, st interest.Status) {
 			"consequence", "no stream exists for this topic on this tunnel")
 	default:
 		a.log.Warn("TOPIC NOT DELIVERED", "topic", name, "reason", st.String())
+	}
+}
+
+// logNotHonored says once that the hop above holds the topics but ignores the
+// address they name. An edge answers so, and so does a relay that does not
+// distribute: both deliver as provisioned, which reaches this bridge only if
+// its lane is the one provisioned. Once, because every topic gets the same
+// answer.
+func (a *announcer) logNotHonored(topic string) {
+	a.mu.Lock()
+	first := !a.notHonored
+	a.notHonored = true
+	a.mu.Unlock()
+	if first {
+		a.log.Warn("TOPIC INTEREST: the hop above does not honor -interest-deliver-to and delivers as provisioned",
+			"deliver_to", a.deliverTo.String(), "topic", topic,
+			"consequence", "records arrive here only if this bridge's lane is the one provisioned for the consumer",
+			"fix", "announce to a distributing relay, which sends records to the address named, or leave -interest-deliver-to empty when announcing to the edge")
 	}
 }
 
@@ -326,7 +407,7 @@ func isSilent(u interest.UpstreamInfo) bool { return !u.Reachable && u.Stats.Tim
 
 var (
 	descInterestTopics = prometheus.NewDesc("overlay_bridge_interest_topics",
-		"Topics this bridge announces to its edge, by the edge's answer: ok (served), pending (no answer yet), outside_bound (not in the election and no quota), over_cap (quota used up), not_served (no announced path delivers the topic's group), or another refusal. Anything but ok and pending is a topic whose objects are not arriving.",
+		"Topics this bridge announces to its edge, by the edge's answer: ok (served), pending (no answer yet), outside_bound (not in the election and no quota), over_cap (quota used up), not_served (no announced path delivers the topic's group), bad_address (the hop above refused the address -interest-deliver-to names), or another refusal. Anything but ok and pending is a topic whose objects are not arriving.",
 		[]string{"status"}, nil)
 	descInterestUp = prometheus.NewDesc("overlay_bridge_interest_upstream",
 		"State of each edge this bridge announces to: reachable (it has answered since the last three consecutive losses), synced (it holds exactly what this bridge announced), held (topics it holds for this bridge).",
@@ -353,6 +434,10 @@ func (a *announcer) collect(ch chan<- prometheus.Metric) {
 	counts := map[string]int{}
 	for _, st := range interestStatuses {
 		counts[st.String()] = 0
+	}
+	if a.deliverTo.IsValid() {
+		// Only a bridge that names an address can have it refused.
+		counts[interest.StatusBadAddress.String()] = 0
 	}
 	a.mu.Lock()
 	for _, st := range a.status {

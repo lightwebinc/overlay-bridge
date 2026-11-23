@@ -48,6 +48,7 @@ The protocol is a draft and its wire may still change.
 | `-interest-label` | `overlay-bridge` | distinguishes this bridge from any other announcer on the same host. Two bridges on one host need different labels |
 | `-interest-lifetime` | `0` | the lifetime to ask for, in whole seconds. `0` asks for the edge's default |
 | `-interest-withdraw-on-exit` | `false` | withdraw on exit, so the edge stops delivering announced topics at once. Leave it off for a bridge that restarts: what it announced stays for its lifetime |
+| `-interest-deliver-to` | none | an `address:port` named with every topic as where its delivery records should arrive: this bridge's `-beef-lane`, as the hop above reaches it. For a bridge behind a distributing relay (below). Needs `-interest-upstream`; a port `-beef-lane` does not listen on is reported at startup |
 
 What the edge answers, and what the bridge does with it:
 
@@ -57,6 +58,30 @@ What the edge answers, and what the bridge does with it:
 | outside the bound | not in the election, and the account has no interest quota | `TOPIC NOT DELIVERED`, with the fix |
 | over the cap | the interest quota is used up | `TOPIC NOT DELIVERED`; asked again at every refresh |
 | not served | the consumer's tunnel does not deliver the topic's group; a relay that knows no path it announces to delivers it says `unserved` | `TOPIC NOT DELIVERED` |
+| address not honored | the topic is held, but the hop above ignores `-interest-deliver-to` and delivers as provisioned. An edge answers so, and so does a relay that does not distribute | `topic served by the edge`, and once `TOPIC INTEREST: the hop above does not honor -interest-deliver-to` |
+| bad address | a distributing relay refused the address `-interest-deliver-to` names: it is neither the address the bridge announces from nor inside the prefix the relay allows it to announce from. The topic is not held | `TOPIC NOT DELIVERED`, with the fix |
+
+### Behind a distributing relay
+
+A host deep inside a consumer's network has no lane of its own at the edge.
+The consumer's lane can end at a relay that distributes
+(`interest-relay -distribute-listen`), which writes each topic's records on
+to the hosts that asked for it. The bridge asks for its records with
+`-interest-deliver-to` set to its own lane, and announces to that relay:
+
+```sh
+overlay-bridge -topics tm_example \
+  -beef-lane '[::]:9171' \
+  -interest-upstream '[2001:db8:c:1::1]:8729' \
+  -interest-bind '[2001:db8:c:1::10]:0' \
+  -interest-deliver-to '[2001:db8:c:1::10]:9171'
+```
+
+The relay honors the address only if it is the address the bridge
+announces from or lies inside the `-allow` prefix the bridge announces
+from, so name an address of this host. Delivery from the relay is at most
+once, as on the lane: a bridge that falls behind or restarts loses what the
+relay shed meanwhile.
 
 The announcer is not on the data path. When it is in trouble the bridge
 keeps delivering, and says so:
@@ -77,7 +102,8 @@ Metrics: `overlay_bridge_interest_topics{status}`,
 `overlay_bridge_interest_upstream{upstream,state}` and
 `overlay_bridge_interest_events_total{upstream,event}`. A non-zero
 `overlay_bridge_interest_topics` for any status but `ok` and `pending` is a
-topic whose objects are not arriving.
+topic whose objects are not arriving. An address not honored counts as
+`ok`, and `bad_address` is exported only by a bridge that names an address.
 
 ## Engine
 
