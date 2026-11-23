@@ -33,6 +33,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/overlay"
@@ -146,6 +147,9 @@ func ParseTrust(v string) (TrustRule, error) {
 // Facade is the submit server.
 type Facade struct {
 	cfg Config
+	// topics is the set SetTopics last stored; nil until then, when
+	// cfg.Topics holds.
+	topics atomic.Pointer[map[string]struct{}]
 
 	mu                                                                   sync.Mutex
 	ok, malformed, unknownTopic, loopDropped, engineError, publishFailed uint64
@@ -154,6 +158,21 @@ type Facade struct {
 
 // New returns a facade.
 func New(cfg Config) *Facade { return &Facade{cfg: cfg} }
+
+// SetTopics replaces the set of names the facade may publish, for a bridge
+// whose topics change without a restart. A submission checked after it
+// returns is checked against set. The facade keeps set: the caller must not
+// change it afterwards.
+func (f *Facade) SetTopics(set map[string]struct{}) { f.topics.Store(&set) }
+
+// topicSet is the set in use: the last one SetTopics stored, else
+// Config.Topics.
+func (f *Facade) topicSet() map[string]struct{} {
+	if s := f.topics.Load(); s != nil {
+		return *s
+	}
+	return f.cfg.Topics
+}
 
 // Stats is a point-in-time snapshot.
 type Stats struct {
@@ -236,8 +255,9 @@ func (f *Facade) submit(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "body does not lead with a BEEF marker")
 		return
 	}
+	carried := f.topicSet()
 	for _, name := range topics {
-		if _, ok := f.cfg.Topics[name]; !ok {
+		if _, ok := carried[name]; !ok {
 			f.bump(&f.unknownTopic)
 			httpError(w, http.StatusBadRequest, fmt.Sprintf("this bridge does not carry topic %q", name))
 			return

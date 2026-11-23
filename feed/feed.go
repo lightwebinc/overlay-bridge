@@ -45,8 +45,11 @@ import (
 // is the hash of the name, so the map is derivable and there is nothing to
 // look up.
 type Feed struct {
-	// Topics maps TopicID to the elected topic name.
+	// Topics maps TopicID to the elected topic name. SetTopics replaces it
+	// while the feed runs.
 	Topics map[[32]byte]string
+	// topics is the map SetTopics last stored; nil until then.
+	topics atomic.Pointer[map[[32]byte]string]
 	// Submit is the engine client.
 	Submit Submitter
 	// Guard is the loop guard. The feed marks an object Delivered before
@@ -248,6 +251,21 @@ func NewTopicMap(names []string) map[[32]byte]string {
 	return m
 }
 
+// SetTopics replaces the name map while the feed runs, for a bridge whose
+// topics change without a restart. A delivery named after it returns is named
+// from m; one already named finishes as it was. The feed keeps m: the caller
+// must not change it afterwards.
+func (f *Feed) SetTopics(m map[[32]byte]string) { f.topics.Store(&m) }
+
+// TopicMap is the name map in use: the last one SetTopics stored, else
+// Topics. It must not be changed.
+func (f *Feed) TopicMap() map[[32]byte]string {
+	if m := f.topics.Load(); m != nil {
+		return *m
+	}
+	return f.Topics
+}
+
 // Stats returns a counter snapshot.
 func (f *Feed) Stats() Stats { return f.c.snapshot() }
 
@@ -296,7 +314,10 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		f.logReject("object does not lead with a BEEF marker", topicID, "bytes", len(object))
 		return lanes.ErrReject
 	}
-	name, ok := f.Topics[topicID]
+	// One map for the whole record, so a change of topics mid-record cannot
+	// name it from one map and its other names from another.
+	topics := f.TopicMap()
+	name, ok := topics[topicID]
 	if !ok {
 		// A topic joined through the subscription step but absent from this
 		// bridge's elected list lands here. It is a named counter with the
@@ -318,7 +339,7 @@ func (f *Feed) Handle(ctx context.Context, record []byte) error {
 		if other == name {
 			continue
 		}
-		if elected, ok := f.Topics[objfmt.TopicID(other)]; ok && elected == other {
+		if elected, ok := topics[objfmt.TopicID(other)]; ok && elected == other {
 			names = append(names, other)
 		}
 	}

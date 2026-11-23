@@ -26,14 +26,46 @@ it either way.
 | --- | --- | --- |
 | `-beef-lane` | `[::]:9171` | the edge dials this, so the bridge listens |
 | `-header-lane` | `[::]:9172` | as above |
-| `-topics` | none | the elected topic names; the bridge holds the only name map |
+| `-topics` | none | the elected topic names; the bridge holds the only name map. With `-topics-from engine`, only the names that stand in for an engine's list until it answers |
+| `-topics-from` | empty | `engine`: carry the topics the engines carry, see below. Empty: the `-topics` list |
+| `-topics-every` | `5s` | with `-topics-from engine`, how often each engine is asked (1 s at least) |
+| `-topics-wait` | `30s` | with `-topics-from engine`, how long the bridge waits at start for its engines to answer before it opens its lanes |
 | `-max-object` | codec default (64 MiB) | keep at or below the engine's own body limit |
-| `-subscription-url`, `-subscription-consumer` | none | the base URL of a [subscription source](contracts.md#the-subscription-source) and the consumer's id there. When both are set, `-topics` is checked against that consumer's subscription at startup and a mismatch is logged as `TOPIC MISMATCH`. A source that cannot be read is a warning, not a refusal |
+| `-subscription-url`, `-subscription-consumer` | none | the base URL of a [subscription source](contracts.md#the-subscription-source) and the consumer's id there. When both are set, `-topics` is checked against that consumer's subscription at startup, and again at every change of topics, and a mismatch is logged as `TOPIC MISMATCH`. A source that cannot be read is a warning, not a refusal |
 | `-subscription-token` | none | bearer token for that read; prefer the environment variable above |
 
 A delivered record for a topic not in `-topics` is counted `unknown_topic`
 with the identifier in the log line. That counter is the only signal that a
 subscription and this configuration have drifted apart, so alert on it.
+
+### Topics from the engine
+
+With `-topics-from engine` the bridge carries what its engines carry, and a
+topic added to or dropped from an engine needs no restart of the bridge and
+no second list to keep in step. Every `-topics-every` it asks each engine it
+submits to, `-engine` and the primary of every `-engine-route`, for its topic
+managers: `GET /listTopicManagers`, the route overlay-express and the Go
+engine both serve. A topic is carried when the engine its route sends it to
+lists it; a topic one engine lists but routes elsewhere is not taken from
+that engine.
+
+A change is applied in order: the feed names deliveries of a new topic and
+the facade takes its submissions before the edge is asked for it (topic
+interest, above), and the edge is told of a topic gone, so it stops
+delivering it. Nothing else restarts: the lanes and the edge's other topics
+are not touched.
+
+| Case | What the bridge does |
+| --- | --- |
+| an engine has not answered yet | at start, waits up to `-topics-wait`, then opens its lanes with the `-topics` names routed to that engine and logs `TOPICS NOT YET FROM THE ENGINE`; the engine's list replaces them when it answers |
+| an engine stops answering | keeps the list it last gave, logs `TOPICS NOT FOLLOWED` once and exports `overlay_bridge_topics_engine_up` 0. A topic is dropped only when an engine that answers no longer lists it, never because an engine is down |
+| a primary answers 404, 405 or 501 | it does not list its topics (a storage provider): its topics are the `-topics` names routed to it and every topic a listing engine lists that is routed to it, so a host whose engine carries a storage topic routed to its provider names it once. With neither, `TOPICS NOT FOLLOWED` says nothing is delivered for it |
+| an answer that is not a JSON object of topic names | a failure, as above; never an empty list |
+
+The bridge keeps nothing on disk for this: what each engine listed is asked
+again every `-topics-every`, with the ETag the engine gave, so an unchanged
+list costs a `304`. `overlay_bridge_topics` is the number of topics carried
+now and `overlay_bridge_topics_changes_total` counts the changes.
 
 ## Topic interest
 

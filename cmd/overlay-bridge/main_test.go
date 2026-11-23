@@ -54,6 +54,16 @@ func TestValidate(t *testing.T) {
 		{"engine carries a prefix", func(c *config) { c.engine += "/api/v1" }, "bare origin"},
 		{"no anchor", func(c *config) { c.headerAnchor = "" }, "-header-anchor is required"},
 		{"no topics", func(c *config) { c.topics = "" }, "-topics is required"},
+		// The engine says what is carried, so -topics may be empty.
+		{"topics from the engine", func(c *config) { c.topics, c.topicsFrom, c.topicsEvery = "", "engine", 5*time.Second }, ""},
+		{"topics from somewhere else", func(c *config) { c.topicsFrom, c.topicsEvery = "file", 5*time.Second }, "-topics-from must be"},
+		{"topics from the engine asked too often", func(c *config) { c.topicsFrom, c.topicsEvery = "engine", 100*time.Millisecond }, "-topics-every"},
+		{"topics from the engine, a negative wait", func(c *config) {
+			c.topicsFrom, c.topicsEvery, c.topicsWait = "engine", 5*time.Second, -time.Second
+		}, "-topics-wait"},
+		{"topics from the engine in sink mode", func(c *config) {
+			*c = config{mode: "sink", topicsFrom: "engine", topicsEvery: 5 * time.Second}
+		}, "submits nowhere"},
 		// A facade with nowhere to publish would accept submissions, admit
 		// them locally and silently never put them on the plane.
 		{"facade with no ingress", func(c *config) { c.edgeIngress = "" }, "cannot publish"},

@@ -46,6 +46,10 @@ type config struct {
 	subID      string
 	subToken   string
 
+	topicsFrom  string
+	topicsEvery time.Duration
+	topicsWait  time.Duration
+
 	interestUpstream string
 	interestBind     string
 	interestLabel    string
@@ -111,7 +115,10 @@ func main() {
 	flag.StringVar(&c.mode, "mode", "all", "sink | feed | all")
 	flag.StringVar(&c.beefLane, "beef-lane", "[::]:9171", "BRC-149 delivery-record lane; the edge dials this")
 	flag.StringVar(&c.headerLane, "header-lane", "[::]:9172", "BRC-135 bare header lane; the edge dials this")
-	flag.StringVar(&c.topics, "topics", "", "comma list of elected topic names")
+	flag.StringVar(&c.topics, "topics", "", "comma list of elected topic names; with -topics-from engine, only the names that stand in for an engine's list until it answers")
+	flag.StringVar(&c.topicsFrom, "topics-from", "", "engine = carry the topics the engines carry: each engine this bridge submits to (-engine and every -engine-route primary) is asked GET /listTopicManagers every -topics-every, and a topic it adds or drops is mapped, published and announced, or no longer, without a restart. Empty = the -topics list")
+	flag.DurationVar(&c.topicsEvery, "topics-every", 5*time.Second, "with -topics-from engine, how often each engine is asked for its topics")
+	flag.DurationVar(&c.topicsWait, "topics-wait", 30*time.Second, "with -topics-from engine, how long the bridge waits at start for its engines to answer before it opens its lanes with what it knows")
 	flag.StringVar(&c.subURL, "subscription-url", "", "subscription source base URL (GET {url}/v1/state, see docs/contracts.md); with -subscription-consumer, -topics is reconciled against that consumer's subscription at startup")
 	flag.StringVar(&c.subID, "subscription-consumer", "", "consumer id to reconcile -topics against")
 	flag.StringVar(&c.subToken, "subscription-token", "", "bearer token for the subscription source read; prefer OVERLAY_BRIDGE_SUBSCRIPTION_TOKEN")
@@ -195,6 +202,16 @@ func run(c config, log *slog.Logger) error {
 	log.Info("ECDSA verifier", "sig_verifier", c.verifier())
 
 	names := splitList(c.topics)
+	// With -topics-from engine the engines say what is carried. Asked before
+	// anything opens, so the lanes and the announcer start with their lists.
+	var follow *follower
+	if c.topicsFrom == "engine" {
+		var err error
+		if follow, err = newFollower(c, log); err != nil {
+			return err
+		}
+		names = follow.prime(ctx, c.topicsWait)
+	}
 	reconcileTopics(ctx, c, names, log)
 	ann, err := newAnnouncer(c, names, log)
 	if err != nil {
@@ -355,10 +372,7 @@ func run(c config, log *slog.Logger) error {
 
 	var fac *facade.Facade
 	if c.mode == "all" && c.facadeListen != "" {
-		topicSet := make(map[string]struct{}, len(names))
-		for _, n := range names {
-			topicSet[n] = struct{}{}
-		}
+		topicSet := nameSet(names)
 		var pub facade.Publisher
 		if publish != nil {
 			pub = publish
@@ -411,6 +425,24 @@ func run(c config, log *slog.Logger) error {
 			return ann.Serve(ctx)
 		})
 	}
+	// A change of the engines' topics: the feed names deliveries of a new
+	// topic and the facade takes its submissions BEFORE the edge is asked
+	// for it, and the edge is told of a topic gone after neither does.
+	if follow != nil {
+		apply := func(names []string) {
+			f.SetTopics(feed.NewTopicMap(names))
+			if fac != nil {
+				fac.SetTopics(nameSet(names))
+			}
+			if ann != nil {
+				ann.update(names)
+			}
+			if c.subURL != "" && c.subID != "" {
+				reconcileTopics(ctx, c, names, log)
+			}
+		}
+		tasks.go_("topics-follow", func(ctx context.Context) error { return follow.run(ctx, apply) })
+	}
 
 	// ---- header read API.
 	var api *headers.API
@@ -429,6 +461,7 @@ func run(c config, log *slog.Logger) error {
 			verify:   vmode != feed.VerifyOff,
 			config:   configLabels(c),
 			interest: ann,
+			follow:   follow,
 		}
 		tasks.go_("metrics", func(ctx context.Context) error {
 			return serveMetrics(ctx, c.metricsAddr, col, log)
@@ -492,6 +525,21 @@ func (c config) validate() error {
 	default:
 		return fmt.Errorf("-mode must be sink, feed or all, got %q", c.mode)
 	}
+	switch c.topicsFrom {
+	case "":
+	case "engine":
+		if c.mode == "sink" {
+			return errors.New("-topics-from engine needs an engine to ask: -mode sink submits nowhere")
+		}
+		if c.topicsEvery < time.Second {
+			return errors.New("-topics-every must be at least 1s")
+		}
+		if c.topicsWait < 0 {
+			return errors.New("-topics-wait must be 0 (do not wait) or more")
+		}
+	default:
+		return fmt.Errorf("%w, got %q", errNoFollow, c.topicsFrom)
+	}
 	if c.mode != "sink" {
 		if c.engine == "" {
 			return errors.New("-engine is required unless -mode sink")
@@ -502,8 +550,8 @@ func (c config) validate() error {
 		if c.headerAnchor == "" {
 			return errors.New("-header-anchor is required unless -mode sink")
 		}
-		if strings.TrimSpace(c.topics) == "" {
-			return errors.New("-topics is required unless -mode sink: the bridge holds the only topic name map")
+		if strings.TrimSpace(c.topics) == "" && c.topicsFrom == "" {
+			return errors.New("-topics is required unless -mode sink or -topics-from engine: the bridge holds the only topic name map")
 		}
 		if strings.Contains(c.shadowEngine, "/api/v1") {
 			return errors.New("-shadow-engine is a bare origin: it carries no /api/v1 prefix")
