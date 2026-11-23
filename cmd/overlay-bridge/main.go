@@ -15,10 +15,11 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"slices"
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"syscall"
 	"time"
 
@@ -431,25 +432,52 @@ func run(c config, log *slog.Logger) error {
 	// for it, and the edge is told of a topic gone after neither does.
 	if follow != nil {
 		// A topic dropped: the edge is told at once and the facade refuses it
-		// at once, but the feed keeps its name until the next change or one
-		// -topics-every, so the records already on their way are submitted,
-		// not counted unknown_topic (an alert).
-		prevNames := names
-		var gen atomic.Uint64
+		// at once, but the feed keeps its name for one -topics-every after
+		// the change that dropped it, so the records already on their way
+		// are submitted, not counted unknown_topic (an alert).
+		var (
+			graceMu sync.Mutex
+			current = names
+			gen     uint64
+			grace   = map[string]uint64{} // dropped topic -> the change that dropped it
+		)
+		feedMap := func() map[[32]byte]string {
+			all := slices.Clone(current)
+			for n := range grace {
+				all = append(all, n)
+			}
+			return feed.NewTopicMap(uniqueSorted(all))
+		}
 		apply := func(next []string) {
-			g := gen.Add(1)
-			f.SetTopics(feed.NewTopicMap(unionNames(prevNames, next)))
+			graceMu.Lock()
+			gen++
+			g := gen
+			for _, n := range current {
+				if !slices.Contains(next, n) {
+					grace[n] = g
+				}
+			}
+			for _, n := range next {
+				delete(grace, n)
+			}
+			current = next
+			f.SetTopics(feedMap())
+			graceMu.Unlock()
 			if fac != nil {
 				fac.SetTopics(nameSet(next))
 			}
 			if ann != nil {
 				ann.update(next)
 			}
-			prevNames = next
 			time.AfterFunc(c.topicsEvery, func() {
-				if gen.Load() == g {
-					f.SetTopics(feed.NewTopicMap(next))
+				graceMu.Lock()
+				defer graceMu.Unlock()
+				for n, dg := range grace {
+					if dg <= g {
+						delete(grace, n)
+					}
 				}
+				f.SetTopics(feedMap())
 			})
 			if c.subURL != "" && c.subID != "" {
 				go reconcileTopics(ctx, c, next, log) // up to 15 s: never holds the next ask
