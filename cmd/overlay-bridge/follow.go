@@ -392,6 +392,3 @@ func nameSet(names []string) map[string]struct{} {
 	}
 	return s
 }
-
-// unionNames is every name in a or b.
-func unionNames(a, b []string) []string { return uniqueSorted(append(slices.Clone(a), b...)) }
