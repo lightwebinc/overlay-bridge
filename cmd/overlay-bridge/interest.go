@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -123,7 +124,8 @@ func newAnnouncer(c config, names []string, log *slog.Logger) (*announcer, error
 	// A lane on another port than the one named receives nothing that is
 	// sent to the name, unless something forwards it. That may be meant (a
 	// port mapped in front of the bridge), so it is said, not refused.
-	if lane, err := netip.ParseAddrPort(c.beefLane); err == nil && deliverTo.IsValid() && lane.Port() != deliverTo.Port() {
+	// SplitHostPort, not ParseAddrPort: -beef-lane may be written ":9171".
+	if _, port, err := net.SplitHostPort(c.beefLane); err == nil && deliverTo.IsValid() && port != strconv.Itoa(int(deliverTo.Port())) {
 		log.Warn("topic interest: -interest-deliver-to names a port -beef-lane does not listen on",
 			"deliver_to", deliverTo.String(), "beef_lane", c.beefLane,
 			"consequence", "records sent to the address named arrive here only if something forwards that port to the lane")
@@ -201,7 +203,7 @@ func (a *announcer) onStatus(id interest.TopicID, st interest.Status) {
 			a.logNotHonored(name)
 		}
 	case st == interest.StatusPending:
-	case st == interest.StatusBadAddress:
+	case st == interest.StatusBadAddress && a.deliverTo.IsValid():
 		a.log.Warn("TOPIC NOT DELIVERED: the hop above refused the address -interest-deliver-to names",
 			"topic", name, "deliver_to", a.deliverTo.String(),
 			"consequence", "the topic is not held there, so nothing is delivered for it",

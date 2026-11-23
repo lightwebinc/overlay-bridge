@@ -600,6 +600,20 @@ func TestAnnouncerDeliverToWarnings(t *testing.T) {
 	if !strings.Contains(logs.String(), "names a port -beef-lane does not listen on") {
 		t.Errorf("a port mismatch was not reported:\n%s", logs.String())
 	}
+	// The same with the lane written without a host, and nothing when the
+	// ports agree.
+	for lane, want := range map[string]bool{":9171": true, ":9181": false, "[::]:9181": false} {
+		var l syncBuffer
+		if _, err := newAnnouncer(config{
+			interestUpstream: "[::1]:8729", interestBind: "[::]:0", interestLabel: "t",
+			interestDeliver: "[2001:db8::1]:9181", beefLane: lane,
+		}, []string{"tm_a"}, slog.New(slog.NewTextHandler(&l, nil))); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(l.String(), "does not listen on"); got != want {
+			t.Errorf("-beef-lane %s: port warning %v, want %v", lane, got, want)
+		}
+	}
 	a.onStatus(interest.TopicID(objfmt.TopicID("tm_refused")), interest.StatusBadAddress)
 	out := logs.String()
 	if !strings.Contains(out, "refused the address -interest-deliver-to names") || !strings.Contains(out, "tm_refused") {
