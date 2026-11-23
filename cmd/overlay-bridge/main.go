@@ -51,6 +51,7 @@ type config struct {
 	interestLabel    string
 	interestLifetime time.Duration
 	interestWithdraw bool
+	interestDeliver  string
 
 	engine        string
 	shadowEngine  string
@@ -119,6 +120,7 @@ func main() {
 	flag.StringVar(&c.interestLabel, "interest-label", "overlay-bridge", "label that distinguishes this bridge from any other announcer on the same host")
 	flag.DurationVar(&c.interestLifetime, "interest-lifetime", 0, "lifetime to ask the edge for, in whole seconds; 0 asks for the edge's default")
 	flag.BoolVar(&c.interestWithdraw, "interest-withdraw-on-exit", false, "withdraw the interest on exit, so the edge stops delivering announced topics at once; leave off for a bridge that restarts")
+	flag.StringVar(&c.interestDeliver, "interest-deliver-to", "", "address:port to name with every announced topic as where its delivery records should arrive: this bridge's -beef-lane, as the hop above reaches it. For a bridge behind a relay that distributes: it ends the consumer's lane and sends each topic's records to the address its hosts name. An edge does not honor it and delivers as provisioned; empty = name no address")
 	flag.StringVar(&c.engine, "engine", "", "BRC-22 submit base, root-mounted, no /api/v1 prefix")
 	flag.StringVar(&c.shadowEngine, "shadow-engine", "", "a second BRC-22 submit base fed every object the primary is fed, asynchronously, and compared per topic; empty = off")
 	flag.IntVar(&c.shadowWorkers, "shadow-workers", 2, "concurrent shadow submits")
