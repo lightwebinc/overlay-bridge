@@ -186,6 +186,25 @@ func (fo *follower) prime(ctx context.Context, wait time.Duration) []string {
 	}
 	fo.current = fo.carried()
 	out := slices.Clone(fo.current)
+	// Judged once every list is in: a provider is fed the topics the engines
+	// list that route to it, so it is empty only if none does.
+	for _, o := range fo.origins {
+		if !o.static {
+			continue
+		}
+		n := 0
+		for _, t := range out {
+			if fo.originOf(t) == o {
+				n++
+			}
+		}
+		if n == 0 {
+			fo.log.Warn("TOPICS NOT FOLLOWED: an engine does not list its topics and no carried topic is routed to it",
+				"engine", o.base,
+				"consequence", "nothing is delivered here for the topics this engine carries",
+				"fix", "name its topics in -topics, add them to a listing engine, or run an engine that serves GET "+listPath)
+		}
+	}
 	fo.mu.Unlock()
 	fo.log.Info("topics from the engines", "topics", len(out), "engines", len(fo.origins), "every", fo.every)
 	return out
@@ -242,15 +261,8 @@ func (fo *follower) read(ctx context.Context, o *origin, loud bool) {
 		// 404 (a proxy, a deploy in progress) is failing, not a provider.
 		// It answers, but not this question: not an engine that lists.
 		o.static = true
-		if len(o.known) == 0 {
-			fo.log.Warn("TOPICS NOT FOLLOWED: an engine does not list its topics and -topics names none routed to it",
-				"engine", o.base, "status", status,
-				"consequence", "nothing is delivered here for the topics this engine carries",
-				"fix", "name its topics in -topics, or run an engine that serves GET "+listPath)
-		} else {
-			fo.log.Info("this engine does not list its topics: the -topics names routed to it are its topics",
-				"engine", o.base, "status", status, "topics", len(o.known))
-		}
+		fo.log.Info("this engine does not list its topics: the topics routed to it are the -topics names and those the listing engines list",
+			"engine", o.base, "status", status)
 	default:
 		if err == nil {
 			err = fmt.Errorf("answered %d", status)

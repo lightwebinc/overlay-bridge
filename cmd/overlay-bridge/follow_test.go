@@ -251,7 +251,7 @@ func TestFollowerStaticPrimary(t *testing.T) {
 		t.Fatalf("carried %v, want [tm_a tm_bstoreblob_1]", got)
 	}
 	if !strings.Contains(logs.String(), "does not list its topics") || strings.Contains(logs.String(), "TOPICS NOT FOLLOWED") {
-		t.Errorf("a provider with -topics names should be said once at info:\n%s", logs.String())
+		t.Errorf("a provider with topics routed to it should be said at info only:\n%s", logs.String())
 	}
 
 	// The engine lists a blob topic it routes to the provider: carried,
@@ -263,8 +263,13 @@ func TestFollowerStaticPrimary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var logs3 syncBuffer
+	fo3.log = slog.New(slog.NewTextHandler(&logs3, nil))
 	if got := fo3.prime(context.Background(), 2*time.Second); !slices.Equal(got, []string{"tm_a", "tm_bstoreblob_2"}) {
 		t.Fatalf("carried %v, want [tm_a tm_bstoreblob_2]", got)
+	}
+	if strings.Contains(logs3.String(), "TOPICS NOT FOLLOWED") {
+		t.Errorf("a provider fed by the engine's list was warned about:\n%s", logs3.String())
 	}
 
 	c.topics = ""
@@ -274,7 +279,7 @@ func TestFollowerStaticPrimary(t *testing.T) {
 		t.Fatal(err)
 	}
 	fo2.prime(context.Background(), time.Second)
-	if !strings.Contains(logs2.String(), "TOPICS NOT FOLLOWED: an engine does not list its topics and -topics names none") {
+	if !strings.Contains(logs2.String(), "TOPICS NOT FOLLOWED: an engine does not list its topics and no carried topic") {
 		t.Errorf("a provider with no -topics names was not warned about:\n%s", logs2.String())
 	}
 }
