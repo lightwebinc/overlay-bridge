@@ -3,7 +3,7 @@ module github.com/lightwebinc/overlay-bridge
 go 1.26.2
 
 require (
-	github.com/bsv-blockchain/go-sdk v1.7.5
+	github.com/bsv-blockchain/go-sdk v1.7.8
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1
 	github.com/lightwebinc/shard-common v0.28.0
 	github.com/lightwebinc/teranode-bridge v0.13.2
@@ -15,7 +15,7 @@ require (
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/mrz1836/go-whatsonchain v1.3.0 // indirect
+	github.com/mrz1836/go-whatsonchain v1.3.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/common v0.72.0 // indirect
