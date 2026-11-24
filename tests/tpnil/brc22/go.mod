@@ -5,8 +5,8 @@ module github.com/lightwebinc/overlay-bridge/tests/tpnil/brc22
 go 1.26.2
 
 require (
-	github.com/bsv-blockchain/go-overlay-services v1.3.10
-	github.com/bsv-blockchain/go-sdk v1.7.8
+	github.com/bsv-blockchain/go-overlay-services v1.3.9
+	github.com/bsv-blockchain/go-sdk v1.7.5
 	github.com/gofiber/fiber/v2 v2.52.16
 )
 
@@ -20,8 +20,8 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.31 // indirect
 	github.com/molecule-man/go-brrr v1.2.0 // indirect
-	github.com/mrz1836/go-whatsonchain v1.3.1 // indirect
-	github.com/oapi-codegen/runtime v1.9.0 // indirect
+	github.com/mrz1836/go-whatsonchain v1.3.0 // indirect
+	github.com/oapi-codegen/runtime v1.8.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
